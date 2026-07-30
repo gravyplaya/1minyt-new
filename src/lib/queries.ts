@@ -37,7 +37,7 @@ export function queryChannelsFromParams(params: {
   if (params.q) query.search = params.q;
   if (params.folder) query.folderId = params.folder;
   if (params.tag) query.tagId = params.tag;
-  if (params.sort === 'recent' || params.sort === 'alpha' || params.sort === 'subscribers' || params.sort === 'videos' || params.sort === 'updated') {
+  if (params.sort === 'recent' || params.sort === 'alpha' || params.sort === 'alpha-desc' || params.sort === 'subscribers' || params.sort === 'videos' || params.sort === 'updated') {
     query.sort = params.sort;
   }
   if (params.dir === 'asc' || params.dir === 'desc') query.dir = params.dir;

@@ -1,6 +1,7 @@
 # 1minyt — Subscriptions
 
 > Phase 1 foundation (TAV-3): organize, search, and curate your YouTube subscriptions.
+> Phase 2 (TAV-4): 1-Click Instant Summaries — transcript + LLM summarization, inline.
 
 This is the foundation ticket for the 1minyt product — the app that turns your
 flat, polluted YouTube subscription feed into something you can actually use.
@@ -24,6 +25,10 @@ the data model and UI in this repo.
   YouTube.
 - **Per-channel notes** so you remember why you subscribed.
 - **CLI sync** for cron / launchd jobs that keep the library fresh.
+- **1-Click Instant Summaries (TAV-4):** open any channel, hit ⚡ Summarize on a
+  video, and get an inline TL;DR + key points + recommended follow-ups in
+  seconds. Transcripts and summaries are cached in SQLite, so re-clicks are
+  instant and the transcript is reused by Chat-with-Video (TAV-3).
 
 ## Stack
 
@@ -71,6 +76,20 @@ YOUTUBE_CLIENT_ID=...apps.googleusercontent.com
 YOUTUBE_CLIENT_SECRET=...
 YOUTUBE_REDIRECT_URI=http://localhost:3000/api/oauth/callback
 ```
+
+### 3. (Optional, for 1-Click Summaries) OpenRouter API key
+
+Summaries use OpenRouter's OpenAI-compatible `/chat/completions` endpoint. Create
+a key at https://openrouter.ai/keys and add it to `.env`:
+
+```
+OPENROUTER_API_KEY=...
+# Optional — override the default model (openai/gpt-oss-20b:free):
+# SUMMARY_MODEL=openai/gpt-oss-20b:free
+```
+
+Without `OPENROUTER_API_KEY`, the summarize button will surface a clear error
+instead of failing silently.
 
 ### 4. Start
 

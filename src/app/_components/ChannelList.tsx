@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { queryChannelsFromParams } from '@/lib/queries';
 import type { FolderRow, TagRow } from '@/lib/types';
 import { ChannelRowItem } from './ChannelRowItem';
+import { ChannelToolbar } from './ChannelToolbar';
 
 interface Props {
   search: string;
@@ -9,7 +10,7 @@ interface Props {
   tagId: string | null;
   showMusic: boolean;
   showHidden: boolean;
-  sort: 'recent' | 'alpha' | 'subscribers' | 'videos' | 'updated';
+  sort: 'recent' | 'alpha' | 'alpha-desc' | 'subscribers' | 'videos' | 'updated';
   dir: 'asc' | 'desc' | undefined;
   folders: FolderRow[];
   tags: TagRow[];
@@ -18,6 +19,7 @@ interface Props {
 
 const SORT_OPTIONS = [
   { value: 'alpha',       label: 'A → Z' },
+  { value: 'alpha-desc',  label: 'Z → A' },
   { value: 'recent',      label: 'Recently subscribed' },
   { value: 'subscribers', label: 'Most subscribers' },
   { value: 'videos',      label: 'Most videos' },
@@ -32,34 +34,21 @@ export function ChannelList({ search, folderId, tagId, showMusic, showHidden, so
 
   return (
     <div>
-      {/* Toolbar */}
-      <form action="/" method="get" style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input
-          className="input"
-          type="search"
-          name="q"
-          defaultValue={search}
-          placeholder="Search channels, handles, descriptions…"
-          style={{ flex: 1, minWidth: 240 }}
-        />
-        {folderId && <input type="hidden" name="folder" value={folderId} />}
-        {tagId && <input type="hidden" name="tag" value={tagId} />}
-        {showMusic && <input type="hidden" name="showMusic" value="1" />}
-        {showHidden && <input type="hidden" name="showHidden" value="1" />}
-        <select
-          className="input"
-          name="sort"
-          defaultValue={sort}
-          onChange={e => (e.currentTarget.form as HTMLFormElement).submit()}
-          style={{ width: 'auto', minWidth: 160 }}
-        >
-          {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <button className="btn" type="submit">Search</button>
-        {(search || folderId || tagId) && (
+      {/* Toolbar (client component — auto-submits on sort change) */}
+      <ChannelToolbar
+        search={search}
+        folderId={folderId}
+        tagId={tagId}
+        showMusic={showMusic}
+        showHidden={showHidden}
+        sort={sort}
+        sortOptions={SORT_OPTIONS}
+      />
+      {(search || folderId || tagId) && (
+        <div style={{ marginBottom: 12 }}>
           <Link className="btn btn-ghost" href="/">Clear</Link>
-        )}
-      </form>
+        </div>
+      )}
 
       {/* Summary */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, color: '#8b8b94', fontSize: 13 }}>

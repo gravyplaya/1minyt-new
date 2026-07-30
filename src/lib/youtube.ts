@@ -102,6 +102,64 @@ export async function fetchAllSubscriptions(accessToken: string): Promise<youtub
 }
 
 /**
+ * Fetch the recent uploads for a single channel. Uses the channel's
+ * `contentDetails.relatedPlaylists.uploads` playlist to list videos in order.
+ * Returns up to `max` items (newest first).
+ */
+export async function fetchChannelUploads(
+  accessToken: string,
+  channelId: string,
+  max = 30,
+): Promise<youtube_v3.Schema$PlaylistItem[]> {
+  const yt = youtubeClientWithToken(accessToken);
+  // Resolve the uploads playlist id for the channel.
+  const chRes = await yt.channels.list({
+    part: ['contentDetails'],
+    id: [channelId],
+    maxResults: 1,
+  });
+  const uploadsPlaylistId = chRes.data.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+  if (!uploadsPlaylistId) return [];
+
+  const out: youtube_v3.Schema$PlaylistItem[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await yt.playlistItems.list({
+      part: ['snippet', 'contentDetails'],
+      playlistId: uploadsPlaylistId,
+      maxResults: Math.min(50, max - out.length),
+      pageToken,
+    });
+    out.push(...(res.data.items ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken && out.length < max);
+  return out.slice(0, max);
+}
+
+/**
+ * Fetch full video details (snippet + contentDetails for duration) for a batch
+ * of video IDs. Used to enrich the playlist items with ISO-8601 duration.
+ */
+export async function fetchVideoDetails(
+  accessToken: string,
+  videoIds: string[],
+): Promise<youtube_v3.Schema$Video[]> {
+  if (videoIds.length === 0) return [];
+  const yt = youtubeClientWithToken(accessToken);
+  const out: youtube_v3.Schema$Video[] = [];
+  for (let i = 0; i < videoIds.length; i += 50) {
+    const slice = videoIds.slice(i, i + 50);
+    const res = await yt.videos.list({
+      part: ['snippet', 'contentDetails', 'statistics'],
+      id: slice,
+      maxResults: 50,
+    });
+    out.push(...(res.data.items ?? []));
+  }
+  return out;
+}
+
+/**
  * Look up full channel details (snippet + statistics + brandingSettings + contentDetails)
  * for a batch of channel IDs. Returns whatever the API gave back; missing channels are
  * silently dropped.

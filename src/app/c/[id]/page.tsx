@@ -2,8 +2,10 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { getChannel, listFolders, listTags } from '@/lib/repo';
+import { listVideosByChannel } from '@/lib/video-repo';
 import { HeaderBar } from '../../_components/HeaderBar';
 import { ChannelEditor } from '../../_components/ChannelEditor';
+import { VideosPanel } from '../../_components/VideosPanel';
 import { formatCount, formatRelative, youtubeChannelUrl } from '../../_lib/format';
 import { isConnected } from '@/lib/tokens';
 
@@ -20,10 +22,12 @@ export default async function ChannelPage({ params }: Props) {
 
   const folders = listFolders();
   const tags = listTags();
+  const connected = isConnected();
+  const videos = listVideosByChannel(channel.channel_id, 30);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={isConnected()} />
+      <HeaderBar connected={connected} />
       <main style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 14 }}>
           <Link href="/" style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to subscriptions</Link>
@@ -69,6 +73,8 @@ export default async function ChannelPage({ params }: Props) {
         </header>
 
         <ChannelEditor channel={channel} folders={folders} tags={tags} />
+
+        <VideosPanel channelId={channel.channel_id} initialVideos={videos} connected={connected} />
       </main>
     </div>
   );

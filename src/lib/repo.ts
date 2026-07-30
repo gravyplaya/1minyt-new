@@ -11,19 +11,21 @@ import type {
 } from './types';
 
 const SORT_SQL: Record<ChannelSort, string> = {
-  alpha:      'title COLLATE NOCASE',
-  recent:     'COALESCE(subscribed_at, 0)',
-  subscribers:'COALESCE(subscriber_count, 0)',
-  videos:     'COALESCE(video_count, 0)',
-  updated:    'updated_at',
+  alpha:       'title COLLATE NOCASE',
+  'alpha-desc':'title COLLATE NOCASE',
+  recent:      'COALESCE(subscribed_at, 0)',
+  subscribers:  'COALESCE(subscriber_count, 0)',
+  videos:      'COALESCE(video_count, 0)',
+  updated:     'updated_at',
 };
 
 const DEFAULT_DIR: Record<ChannelSort, 'asc' | 'desc'> = {
-  alpha: 'asc',
-  recent: 'desc',
-  subscribers: 'desc',
-  videos: 'desc',
-  updated: 'desc',
+  alpha:       'asc',
+  'alpha-desc':'desc',
+  recent:      'desc',
+  subscribers:  'desc',
+  videos:      'desc',
+  updated:     'desc',
 };
 
 export function listChannels(query: ChannelQuery = {}): ChannelWithRelations[] {

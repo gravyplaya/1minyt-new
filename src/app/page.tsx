@@ -33,7 +33,7 @@ export default async function HomePage({ searchParams }: PageProps) {
   const search = params.q ?? '';
   const showMusic = params.showMusic === '1';
   const showHidden = params.showHidden === '1';
-  const sort = (params.sort as 'recent' | 'alpha' | 'subscribers' | 'videos' | 'updated') ?? 'alpha';
+  const sort = (params.sort as 'recent' | 'alpha' | 'alpha-desc' | 'subscribers' | 'videos' | 'updated') ?? 'alpha';
   const dir = (params.dir as 'asc' | 'desc') ?? undefined;
 
   const baseQuery: Record<string, string> = {};

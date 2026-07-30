@@ -32,3 +32,18 @@ export function youtubeChannelUrl(channelId: string, customUrl?: string | null):
   }
   return `https://www.youtube.com/channel/${channelId}`;
 }
+
+export function youtubeVideoUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
+/** Parse an ISO-8601 duration like "PT1H2M3S" into seconds. Returns null on failure. */
+export function parseIso8601Duration(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(iso);
+  if (!m) return null;
+  const hours = Number(m[1] ?? 0);
+  const minutes = Number(m[2] ?? 0);
+  const seconds = Number(m[3] ?? 0);
+  return hours * 3600 + minutes * 60 + seconds;
+}

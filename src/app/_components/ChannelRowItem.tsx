@@ -20,8 +20,7 @@ export function ChannelRowItem({
     .filter((t): t is TagRow => Boolean(t));
 
   return (
-    <Link
-      href={`/c/${channel.channel_id}`}
+    <div
       style={{
         display: 'grid',
         gridTemplateColumns: '64px 1fr auto',
@@ -37,39 +36,60 @@ export function ChannelRowItem({
       }}
       className="channel-row"
     >
-      <Thumb url={channel.thumbnail_url} alt={channel.title} />
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {channel.title}
-          </span>
-          {channel.handle && (
-            <span style={{ color: '#8b8b94', fontSize: 12 }}>{channel.handle}</span>
-          )}
-          {channel.music_flag === 1 && <span className="chip chip-music">🎵 music</span>}
-          {channel.hidden === 1 && <span className="chip">hidden</span>}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-          {folderNames.map(f => (
-            <span key={f.id} className="chip" style={{ background: f.color ?? undefined, color: '#0a0a0c', borderColor: 'transparent' }}>
-              {f.name}
+      <Link href={`/c/${channel.channel_id}`} style={{ textDecoration: 'none', color: 'inherit', display: 'contents' }}>
+        <Thumb url={channel.thumbnail_url} alt={channel.title} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {channel.title}
             </span>
-          ))}
-          {tagNames.map(t => (
-            <span key={t.id} className="chip">#{t.name}</span>
-          ))}
-          {channel.description && (
-            <span style={{ color: '#5a5a64', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 480 }}>
-              {channel.description.split('\n')[0]}
-            </span>
-          )}
+            {channel.handle && (
+              <span style={{ color: '#8b8b94', fontSize: 12 }}>{channel.handle}</span>
+            )}
+            {channel.music_flag === 1 && <span className="chip chip-music">🎵 music</span>}
+            {channel.hidden === 1 && <span className="chip">hidden</span>}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+            {folderNames.map(f => (
+              <span key={f.id} className="chip" style={{ background: f.color ?? undefined, color: '#0a0a0c', borderColor: 'transparent' }}>
+                {f.name}
+              </span>
+            ))}
+            {tagNames.map(t => (
+              <span key={t.id} className="chip">#{t.name}</span>
+            ))}
+            {channel.description && (
+              <span style={{ color: '#5a5a64', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 480 }}>
+                {channel.description.split('\n')[0]}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      </Link>
       <div style={{ textAlign: 'right', color: '#8b8b94', fontSize: 12, whiteSpace: 'nowrap' }}>
         <div>{formatCount(channel.subscriber_count)} subscribers</div>
         <div>{formatCount(channel.video_count)} videos</div>
+        <Link
+          href={`/c/${channel.channel_id}#videos`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            marginTop: 6,
+            fontSize: 11,
+            fontWeight: 500,
+            color: '#5b9eff',
+            textDecoration: 'none',
+            border: '1px solid #2a2a33',
+            borderRadius: 999,
+            padding: '2px 8px',
+          }}
+          title="Open this channel and summarize a video"
+        >
+          ⚡ Summarize
+        </Link>
       </div>
-    </Link>
+    </div>
   );
 }
 

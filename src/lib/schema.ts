@@ -99,6 +99,96 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   expiry_date   INTEGER,
   updated_at    INTEGER NOT NULL
 );
+
+-- ----- TAV-4: 1-Click Instant Summaries -------------------------------------
+-- Videos we've seen (recent uploads per channel). We cache transcript + summary
+-- so a re-click is instant and so Chat-with-Video (TAV-3) can reuse the
+-- transcript without re-fetching. A video belongs to exactly one channel.
+
+CREATE TABLE IF NOT EXISTS videos (
+  video_id      TEXT PRIMARY KEY,            -- YouTube video id (11 chars)
+  channel_id    TEXT NOT NULL REFERENCES channels(channel_id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  thumbnail_url TEXT,
+  duration_seconds INTEGER,
+  published_at  INTEGER,                       -- unix seconds
+  transcript    TEXT,                          -- raw fetched transcript (nullable while pending/failed)
+  transcript_status TEXT NOT NULL DEFAULT 'pending',  -- pending | fetched | unavailable | error
+  transcript_fetched_at INTEGER,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_videos_status  ON videos(transcript_status);
+
+-- One summary per (video, model) so swapping models re-summarizes without
+-- clobbering the prior result. The UI shows the most recent.
+
+CREATE TABLE IF NOT EXISTS summaries (
+  id          TEXT PRIMARY KEY,
+  video_id    TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+  model       TEXT NOT NULL,                  -- e.g. "zai-org-glm-5-1"
+  tldr        TEXT NOT NULL,
+  key_points  TEXT NOT NULL,                   -- JSON array of strings
+  follow_ups  TEXT,                             -- JSON array of {video_id,title,reason} (may be empty)
+  prompt      TEXT NOT NULL,
+  token_count INTEGER,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_summaries_video ON summaries(video_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_video_model ON summaries(video_id, model);
+
+-- ----- TAV-5: Chat with Video (RAG over transcripts) -------------------------
+-- Timestamped transcript segments, one row per caption cue. Populated when a
+-- video is indexed for chat. The plain-text videos.transcript column is kept
+-- for the summarizer; this table adds the timing the chat needs to link answers
+-- back to moments in the video.
+
+CREATE TABLE IF NOT EXISTS transcript_segments (
+  video_id   TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+  seg_index INTEGER NOT NULL,              -- 0-based order within the video
+  text       TEXT NOT NULL,
+  start_ms   INTEGER NOT NULL,             -- cue start, milliseconds from video start
+  end_ms     INTEGER,                      -- cue end (nullable for the last cue)
+  PRIMARY KEY (video_id, seg_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tsegs_video ON transcript_segments(video_id, seg_index);
+
+-- Transcript chunks for vector search. Each chunk groups 1-N adjacent segments
+-- into a ~300-500 char passage. The embedding is a Float32 BLOB of dimension
+-- matching the embedding model (1024 for bge-m3). Cosine similarity is computed
+-- in JS at query time — fine for the per-video scale (~50-200 chunks).
+
+CREATE TABLE IF NOT EXISTS transcript_chunks (
+  id          TEXT PRIMARY KEY,
+  video_id    TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,             -- 0-based order within the video
+  text        TEXT NOT NULL,
+  start_ms    INTEGER NOT NULL,             -- first segment's start
+  end_ms      INTEGER,                      -- last segment's end
+  embedding   BLOB NOT NULL,                -- Float32Array buffer
+  embed_model TEXT NOT NULL,                -- which model produced the vector
+  created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_video ON transcript_chunks(video_id, chunk_index);
+
+-- Chat messages — the conversation history per video. The UI replays these to
+-- keep context across turns without server-side session state.
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id          TEXT PRIMARY KEY,
+  video_id    TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+  role        TEXT NOT NULL,               -- 'user' | 'assistant'
+  content     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_video ON chat_messages(video_id, created_at);
 `;
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

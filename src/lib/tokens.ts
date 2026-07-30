@@ -46,8 +46,10 @@ export function isConnected(userId = 'me'): boolean {
 export async function getValidAccessToken(userId = 'me'): Promise<string> {
   const tokens = loadTokens(userId);
   if (!tokens) throw new Error('Not connected — authorize first');
-  const now = Math.floor(Date.now() / 1000);
-  if (tokens.expiry_date && tokens.expiry_date - now > 60) {
+  // Google's OAuth2 client stores expiry_date in milliseconds (epoch ms).
+  // Compare against Date.now() (also ms) — NOT seconds.
+  const nowMs = Date.now();
+  if (tokens.expiry_date && tokens.expiry_date - nowMs > 60_000) {
     return tokens.access_token;
   }
   const refreshed = await refreshAccessToken(tokens.refresh_token);
