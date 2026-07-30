@@ -1,20 +1,10 @@
 /**
  * Local vector store for TAV-5 (Chat with Video).
  *
- * Phase 1: SQLite only, no hosted service. Transcript segments are grouped
+ * Phase 1: PostgreSQL only, no hosted service. Transcript segments are grouped
  * into ~300-500 char chunks, embedded with a local hashing vectorizer (see
- * embeddings.ts), and stored as Float32 BLOBs. Cosine similarity search is
- * computed in JS — fine for the per-video scale (~50-200 chunks). No
- * FAISS/ChromaDB dependency.
- *
- * Lifecycle:
- *  - `indexVideo(videoId)` — fetches (or reuses cached) transcript segments,
- *    chunks them, embeds all chunks, persists to SQLite.
- *  - `isIndexed(videoId)` — checks if chunks exist.
- *  - `search(videoId, query, k)` — embeds the query, compares against all
- *    chunks for that video, returns top-k with timestamps for citations.
- *  - `getSegments(videoId)` — returns the timestamped segments (for context
- *    expansion around retrieved chunks).
+ * embeddings.ts), and stored as BYTEA in Postgres. Cosine similarity search is
+ * computed in JS — fine for the per-video scale (~50-200 chunks).
  */
 
 import { getDb } from './db';
@@ -38,21 +28,19 @@ export interface IndexResult {
 }
 
 /**
- * Index a video's transcript for vector search. Fetches segments if not already
- * cached, chunks them, embeds, and persists. Re-indexing replaces prior chunks.
+ * Index a video's transcript for vector search.
  */
 export async function indexVideo(videoId: string): Promise<IndexResult> {
   try {
     // 1. Get or fetch timestamped segments.
-    let segments = getSegments(videoId);
+    let segments = await getSegments(videoId);
     if (segments.length === 0) {
       const fetched = await fetchTranscript(videoId);
       if (!fetched || !fetched.segments || fetched.segments.length === 0) {
         return { ok: false, videoId, chunkCount: 0, embedModel: EMBEDDING_MODEL, error: 'No transcript available for this video.' };
       }
-      // Cache the plain-text transcript for the summarizer too.
-      setTranscript(videoId, fetched.text);
-      saveSegments(videoId, fetched.segments);
+      await setTranscript(videoId, fetched.text);
+      await saveSegments(videoId, fetched.segments);
       segments = fetched.segments;
     }
 
@@ -66,23 +54,29 @@ export async function indexVideo(videoId: string): Promise<IndexResult> {
     const { vectors, model } = embed(chunks.map(c => c.text));
 
     // 4. Persist — replace prior chunks for this video.
-    const db = getDb();
-    const now = Math.floor(Date.now() / 1000);
-    const insert = db.prepare(`
-      INSERT INTO transcript_chunks (id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    db.transaction(() => {
-      db.prepare('DELETE FROM transcript_chunks WHERE video_id = ?').run(videoId);
+    const client = await getDb();
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      await client.query('BEGIN');
+      await client.query('DELETE FROM transcript_chunks WHERE video_id = $1', [videoId]);
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const vec = vectors[i];
         if (!vec) continue;
         const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
-        insert.run(newId(), videoId, i, chunk.text, chunk.start_ms, chunk.end_ms ?? null, blob, model, now);
+        await client.query(
+          `INSERT INTO transcript_chunks (id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [newId(), videoId, i, chunk.text, chunk.start_ms, chunk.end_ms ?? null, blob, model, now],
+        );
       }
-    })();
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
 
     return { ok: true, videoId, chunkCount: chunks.length, embedModel: model };
   } catch (err) {
@@ -92,15 +86,25 @@ export async function indexVideo(videoId: string): Promise<IndexResult> {
 }
 
 /** Whether a video has been indexed (chunks exist in the store). */
-export function isIndexed(videoId: string): boolean {
-  const row = getDb().prepare('SELECT 1 FROM transcript_chunks WHERE video_id = ? LIMIT 1').get(videoId);
-  return !!row;
+export async function isIndexed(videoId: string): Promise<boolean> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query('SELECT 1 FROM transcript_chunks WHERE video_id = $1 LIMIT 1', [videoId]);
+    return rows.length > 0;
+  } finally {
+    client.release();
+  }
 }
 
 /** Count indexed chunks for a video — useful for UI status. */
-export function chunkCount(videoId: string): number {
-  const row = getDb().prepare('SELECT COUNT(*) as n FROM transcript_chunks WHERE video_id = ?').get(videoId) as { n: number };
-  return row.n;
+export async function chunkCount(videoId: string): Promise<number> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query('SELECT COUNT(*) as n FROM transcript_chunks WHERE video_id = $1', [videoId]);
+    return Number(rows[0].n);
+  } finally {
+    client.release();
+  }
 }
 
 // ----- chunking ---------------------------------------------------------------
@@ -112,9 +116,7 @@ interface ChunkInput {
 }
 
 /**
- * Group adjacent transcript segments into ~400-char passages. Each chunk
- * preserves the start time of its first segment and the end time of its last.
- * We don't split mid-segment — segments are already sentence-ish units.
+ * Group adjacent transcript segments into ~400-char passages.
  */
 export function chunkSegments(segments: TranscriptSegment[]): ChunkInput[] {
   const chunks: ChunkInput[] = [];
@@ -160,61 +162,82 @@ export interface SearchResult {
 }
 
 /**
- * Search a video's chunks for the top-k most similar to `query`. Embeds the
- * query, loads all chunk embeddings for the video, and ranks by cosine sim.
+ * Search a video's chunks for the top-k most similar to `query`.
  */
 export async function search(videoId: string, query: string, k = 5): Promise<SearchResult[]> {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT id, video_id, chunk_index, text, start_ms, end_ms, embedding
-    FROM transcript_chunks WHERE video_id = ? ORDER BY chunk_index
-  `).all(videoId) as Array<{ id: string; video_id: string; chunk_index: number; text: string; start_ms: number; end_ms: number | null; embedding: Uint8Array }>;
+  const client = await getDb();
+  try {
+    const { rows } = await client.query(
+      `SELECT id, video_id, chunk_index, text, start_ms, end_ms, embedding
+       FROM transcript_chunks WHERE video_id = $1 ORDER BY chunk_index`,
+      [videoId],
+    );
 
-  if (rows.length === 0) return [];
+    if (rows.length === 0) return [];
 
-  const queryVec = embedQuery(query);
+    const queryVec = embedQuery(query);
 
-  const scored: SearchResult[] = rows.map(row => {
-    const chunkVec = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
-    const score = cosineSim(queryVec, chunkVec);
-    return {
-      score,
-      chunk: {
-        id: row.id,
-        video_id: row.video_id,
-        chunk_index: row.chunk_index,
-        text: row.text,
-        start_ms: row.start_ms,
-        end_ms: row.end_ms,
-      },
-    };
-  });
+    const scored: SearchResult[] = rows.map((row: { id: string; video_id: string; chunk_index: number; text: string; start_ms: number; end_ms: number | null; embedding: Buffer }) => {
+      const chunkVec = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+      const score = cosineSim(queryVec, chunkVec);
+      return {
+        score,
+        chunk: {
+          id: row.id,
+          video_id: row.video_id,
+          chunk_index: row.chunk_index,
+          text: row.text,
+          start_ms: row.start_ms,
+          end_ms: row.end_ms,
+        },
+      };
+    });
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, k);
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, k);
+  } finally {
+    client.release();
+  }
 }
 
 // ----- segment persistence ----------------------------------------------------
 
-/** Save timestamped segments to SQLite (idempotent — replaces prior rows). */
-export function saveSegments(videoId: string, segments: TranscriptSegment[]): void {
-  const db = getDb();
-  db.transaction(() => {
-    db.prepare('DELETE FROM transcript_segments WHERE video_id = ?').run(videoId);
-    const insert = db.prepare('INSERT INTO transcript_segments (video_id, seg_index, text, start_ms, end_ms) VALUES (?, ?, ?, ?, ?)');
+/** Save timestamped segments to Postgres (idempotent — replaces prior rows). */
+export async function saveSegments(videoId: string, segments: TranscriptSegment[]): Promise<void> {
+  const client = await getDb();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM transcript_segments WHERE video_id = $1', [videoId]);
     for (const seg of segments) {
-      insert.run(videoId, seg.seg_index, seg.text, seg.start_ms, seg.end_ms ?? null);
+      await client.query(
+        'INSERT INTO transcript_segments (video_id, seg_index, text, start_ms, end_ms) VALUES ($1, $2, $3, $4, $5)',
+        [videoId, seg.seg_index, seg.text, seg.start_ms, seg.end_ms ?? null],
+      );
     }
-  })();
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** Load cached timestamped segments for a video. Empty if not yet fetched. */
-export function getSegments(videoId: string): TranscriptSegment[] {
-  const rows = getDb().prepare('SELECT * FROM transcript_segments WHERE video_id = ? ORDER BY seg_index').all(videoId) as Array<{
-    seg_index: number;
-    text: string;
-    start_ms: number;
-    end_ms: number | null;
-  }>;
-  return rows.map(r => ({ text: r.text, start_ms: r.start_ms, end_ms: r.end_ms, seg_index: r.seg_index }));
+export async function getSegments(videoId: string): Promise<TranscriptSegment[]> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query(
+      'SELECT * FROM transcript_segments WHERE video_id = $1 ORDER BY seg_index',
+      [videoId],
+    );
+    return rows.map((r: { seg_index: number; text: string; start_ms: number; end_ms: number | null }) => ({
+      text: r.text,
+      start_ms: r.start_ms,
+      end_ms: r.end_ms,
+      seg_index: r.seg_index,
+    }));
+  } finally {
+    client.release();
+  }
 }

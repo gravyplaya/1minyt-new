@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
         error: 'No refresh_token returned. Revoke prior access at https://myaccount.google.com/permissions and try again.',
       }, { status: 400 });
     }
-    saveTokens('me', tokens.access_token, tokens.refresh_token, tokens.expiry_date);
+    await saveTokens('me', tokens.access_token, tokens.refresh_token, tokens.expiry_date);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

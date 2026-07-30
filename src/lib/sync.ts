@@ -1,6 +1,6 @@
 /**
  * Sync orchestrator — pulls subscriptions from YouTube, enriches with channel
- * details, classifies music, and writes everything into the local DB.
+ * details, classifies music, and writes everything into the Postgres DB.
  *
  * Idempotent: re-running is a no-op for unchanged channels and only updates
  * the rows that actually changed.
@@ -21,7 +21,7 @@ export interface SyncResult {
 }
 
 export async function syncSubscriptions(): Promise<SyncResult> {
-  const runId = recordSyncStart();
+  const runId = await recordSyncStart();
   const result: SyncResult = { seen: 0, new: 0, updated: 0, errors: [] };
   try {
     const accessToken = await getValidAccessToken();
@@ -69,16 +69,16 @@ export async function syncSubscriptions(): Promise<SyncResult> {
         updated_at: now,
       };
 
-      const { created } = upsertChannel(row);
+      const { created } = await upsertChannel(row);
       if (created) result.new += 1; else result.updated += 1;
     }
 
-    recordSyncFinish(runId, { status: 'success', seen: result.seen, new: result.new, updated: result.updated });
+    await recordSyncFinish(runId, { status: 'success', seen: result.seen, new: result.new, updated: result.updated });
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     result.errors.push(msg);
-    recordSyncFinish(runId, { status: 'error', seen: result.seen, new: result.new, updated: result.updated, error: msg });
+    await recordSyncFinish(runId, { status: 'error', seen: result.seen, new: result.new, updated: result.updated, error: msg });
     return result;
   }
 }

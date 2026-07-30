@@ -22,11 +22,13 @@ interface PageProps {
 
 export default async function HomePage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const connected = isConnected();
-  const lastSync = latestSyncRun();
-  const folders = listFolders();
-  const tags = listTags();
-  const counts = countChannels();
+  const [connected, lastSync, folders, tags, counts] = await Promise.all([
+    isConnected(),
+    latestSyncRun(),
+    listFolders(),
+    listTags(),
+    countChannels(),
+  ]);
 
   const activeFolder = params.folder ?? null;
   const activeTag = params.tag ?? null;
@@ -213,7 +215,7 @@ function ConnectPrompt() {
   );
 }
 
-function FirstRunSync({ lastSync }: { lastSync: ReturnType<typeof latestSyncRun> }) {
+function FirstRunSync({ lastSync }: { lastSync: { started_at: number; status: string; channels_seen: number; channels_new: number; channels_updated: number; error: string | null } | null }) {
   return (
     <div style={{ maxWidth: 540, margin: '60px auto', textAlign: 'center' }}>
       <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8 }}>You&apos;re connected</h2>

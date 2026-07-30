@@ -17,13 +17,15 @@ interface Props {
 
 export default async function ChannelPage({ params }: Props) {
   const { id } = await params;
-  const channel = getChannel(id);
+  const channel = await getChannel(id);
   if (!channel) notFound();
 
-  const folders = listFolders();
-  const tags = listTags();
-  const connected = isConnected();
-  const videos = listVideosByChannel(channel.channel_id, 30);
+  const [folders, tags, connected, videos] = await Promise.all([
+    listFolders(),
+    listTags(),
+    isConnected(),
+    listVideosByChannel(channel.channel_id, 30),
+  ]);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>

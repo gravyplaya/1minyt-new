@@ -13,7 +13,7 @@ the data model and UI in this repo.
 ## What it does
 
 - **Pulls your subscriptions** from the YouTube Data API (OAuth, one-time
-  authorization, refresh token persisted locally).
+  authorization, refresh token persisted in Postgres).
 - **Auto-classifies music channels** by topic category, title pattern,
   custom URL, and keywords — then lets you filter them out of your main view
   with a single toggle.
@@ -27,29 +27,62 @@ the data model and UI in this repo.
 - **CLI sync** for cron / launchd jobs that keep the library fresh.
 - **1-Click Instant Summaries (TAV-4):** open any channel, hit ⚡ Summarize on a
   video, and get an inline TL;DR + key points + recommended follow-ups in
-  seconds. Transcripts and summaries are cached in SQLite, so re-clicks are
-  instant and the transcript is reused by Chat-with-Video (TAV-3).
+  seconds. Transcripts and summaries are cached, so re-clicks are instant.
+- **Chat with Video (TAV-5):** ask questions about a video grounded in its
+  transcript via RAG — answers include timestamp citations.
+- **Metrics dashboard (TAV-6):** see your most-engaged channels, videos, and
+  topics.
 
 ## Stack
 
 | Layer        | Choice                                  | Why                                       |
 |--------------|------------------------------------------|--------------------------------------------|
-| App          | Next.js 15 (App Router, RSC)            | Server-rendered, fast, no API routes for most UI |
-| Database     | SQLite (`better-sqlite3`)                | Zero-setup, single-file, easy to back up   |
+| App          | Next.js 16 (App Router, RSC)            | Server-rendered, fast, no API routes for most UI |
+| Database     | PostgreSQL (Neon)                       | Serverless Postgres — works on Netlify |
 | Auth         | Google OAuth (`google-auth-library`)     | `subscriptions.list?mine=true` requires it |
 | API          | `googleapis` YouTube Data API v3         | First-party SDK, no scraping                |
+| LLM          | OpenRouter (`/chat/completions`)         | OpenAI-compatible, free tier available |
 | Styling      | Tailwind 3 + a few CSS variables         | Dark UI without a UI library                |
 
-Everything runs locally on your own machine — no third-party servers touch
-your subscription data.
+## Deploy to Netlify
 
-## Run it
+This app is configured for Netlify deployment out of the box.
+
+### 1. Push to GitHub
+
+```bash
+git remote add origin <your-repo>
+git push -u origin main
+```
+
+### 2. Connect on Netlify
+
+1. Go to [netlify.com](https://app.netlify.com) → **Add new site** → **Import an existing project**.
+2. Pick your GitHub repo.
+3. Netlify will auto-detect Next.js via `netlify.toml`. Build command is `pnpm run build`, publish directory is `.next`.
+4. **Set environment variables** under Site settings → Environment variables:
+
+   | Variable | Value |
+   |----------|-------|
+   | `DATABASE_URL` | Your Neon Postgres connection string (e.g. `postgresql://...?sslmode=require`) |
+   | `YOUTUBE_CLIENT_ID` | Google OAuth client ID |
+   | `YOUTUBE_CLIENT_SECRET` | Google OAuth client secret |
+   | `YOUTUBE_REDIRECT_URI` | `https://your-site.netlify.app/api/oauth/callback` |
+   | `OPENROUTER_API_KEY` | OpenRouter API key (for summaries + chat) |
+
+5. **Deploy.** The schema auto-creates on first DB connection — no manual migration needed.
+
+### 3. Google OAuth redirect URI
+
+In Google Cloud Console → Credentials → your OAuth client, add:
+- `https://your-site.netlify.app/api/oauth/callback`
+
+## Run it locally
 
 ### 1. Install
 
 ```bash
-cd app
-npm install
+pnpm install
 ```
 
 ### 2. Set up Google OAuth
@@ -60,7 +93,6 @@ npm install
 4. **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
    - Application type: **Web application**
    - Authorized redirect URI: `http://localhost:3000/api/oauth/callback`
-     (add additional URIs for any other port/host you use)
 5. Copy the **Client ID** and **Client Secret**.
 
 ### 3. Configure
@@ -72,45 +104,26 @@ cp .env.example .env.local
 Edit `.env.local`:
 
 ```
+DATABASE_URL=postgresql://user:password@host:5432/dbname?sslmode=require
 YOUTUBE_CLIENT_ID=...apps.googleusercontent.com
 YOUTUBE_CLIENT_SECRET=...
 YOUTUBE_REDIRECT_URI=http://localhost:3000/api/oauth/callback
-```
-
-### 3. (Optional, for 1-Click Summaries) OpenRouter API key
-
-Summaries use OpenRouter's OpenAI-compatible `/chat/completions` endpoint. Create
-a key at https://openrouter.ai/keys and add it to `.env`:
-
-```
 OPENROUTER_API_KEY=...
-# Optional — override the default model (openai/gpt-oss-20b:free):
-# SUMMARY_MODEL=openai/gpt-oss-20b:free
 ```
-
-Without `OPENROUTER_API_KEY`, the summarize button will surface a clear error
-instead of failing silently.
 
 ### 4. Start
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 Visit **http://localhost:3000**, click **Connect YouTube**, authorize once,
-then click **Sync now** in the sidebar.
+then click **Sync now** in the sidebar. The database schema auto-creates on first run.
 
 ### 5. (Optional) Headless sync
 
 ```bash
-npm run sync
-```
-
-Useful for cron / launchd:
-
-```cron
-# /usr/local/bin/1minyt-sync — refresh every 6 hours
-0 */6 * * *  cd /path/to/app && /usr/local/bin/node ./node_modules/.bin/tsx scripts/sync-subscriptions.ts >> ~/1minyt-sync.log 2>&1
+pnpm sync
 ```
 
 ## Data model
@@ -123,71 +136,63 @@ channel_folders        many-to-many
 channel_tags           many-to-many
 sync_runs              history of every sync attempt (status, error, counts)
 oauth_tokens           single-user refresh tokens (user_id="me")
+videos                 cached recent uploads per channel (with transcript)
+summaries              one per (video, model) — LLM-generated TL;DR + key points
+transcript_segments    timestamped caption cues for chat RAG
+transcript_chunks      embedded chunks for vector search (BYTEA embeddings)
+chat_messages          conversation history per video
 ```
-
-DB lives at `./data/1minyt.db` by default — override with `DATABASE_PATH`.
 
 ## Verify
 
 ```bash
-npm run typecheck   # tsc --noEmit
-npm run smoke       # exercise the DB layer against a /tmp DB
-npx tsx scripts/test-classifier.ts   # exercise the music classifier
+pnpm typecheck      # tsc --noEmit
+pnpm smoke          # exercise the DB layer against your Postgres instance
+pnpm run lint       # ESLint
+pnpm run build      # Next.js production build
 ```
 
 ## Project structure
 
 ```
-app/
 ├── package.json
 ├── next.config.mjs
+├── netlify.toml           # Netlify deployment config
 ├── tailwind.config.ts
 ├── scripts/
-│   ├── smoke-test.ts          # exercises DB layer
-│   ├── test-classifier.ts     # exercises music classifier
-│   └── sync-subscriptions.ts  # CLI sync (for cron)
+│   ├── smoke-test.ts       # exercises DB layer
+│   ├── test-classifier.ts  # exercises music classifier
+│   └── sync-subscriptions.ts # CLI sync (for cron)
 └── src/
     ├── app/
-    │   ├── page.tsx           # main UI (sidebar + list)
-    │   ├── actions.ts         # server actions (sync, CRUD)
-    │   ├── c/[id]/page.tsx    # channel detail / editor
+    │   ├── page.tsx        # main UI (sidebar + list)
+    │   ├── actions.ts      # server actions (sync, CRUD)
+    │   ├── c/[id]/page.tsx # channel detail / editor
+    │   ├── metrics/page.tsx# metrics dashboard
     │   ├── api/
     │   │   ├── oauth/start/   # kicks off Google consent
     │   │   ├── oauth/callback # persists tokens
     │   │   └── sync/          # POST /api/sync for cron
     │   └── _components/       # UI pieces (RSC + 'use client')
     └── lib/
-        ├── db.ts              # better-sqlite3 singleton
-        ├── schema.ts          # DDL + indexes
-        ├── repo.ts            # CRUD + queries
-        ├── queries.ts         # aggregated counts
-        ├── tokens.ts          # OAuth token storage + refresh
+        ├── db.ts              # pg Pool singleton + schema init
+        ├── schema.ts          # Postgres DDL
+        ├── repo.ts            # CRUD + queries (async)
+        ├── queries.ts         # aggregated counts (async)
+        ├── tokens.ts          # OAuth token storage + refresh (async)
         ├── youtube.ts         # googleapis client
         ├── sync.ts            # sync orchestrator
+        ├── video-sync.ts      # video upload sync
+        ├── video-repo.ts      # video + summary persistence (async)
+        ├── vector-store.ts    # local vector store for RAG (async)
+        ├── embeddings.ts      # local hashing vectorizer
+        ├── transcript.ts      # YouTube transcript fetcher
+        ├── summarize.ts       # LLM summarizer
+        ├── chat.ts            # RAG chat over transcripts
         ├── music-classifier.ts# music / not-music heuristic
         ├── types.ts           # shared domain types
         └── id.ts              # ULID-ish generator
 ```
-
-## Out of scope (Phase 1)
-
-- Multi-user / signup (single-user by design)
-- Mobile UI (desktop-first; will be responsive in Phase 2)
-- Auto re-sync (cron / manual only)
-- 1-click summaries, chat with video, metrics dashboard (Tickets 2/3/4)
-
-## Known limitations
-
-- **Music classifier is heuristic.** It catches the obvious cases (VEVO
-  channels, " - Topic" auto-gen, `/m/04rlf` topic). Edge cases — e.g. an
-  artist with a normal custom URL — may need a manual override via the
-  per-channel Music Classification card.
-- **No automatic refresh.** Phase 1 expects manual sync or a cron job.
-- **Quota.** YouTube Data API v3 has a 10k unit/day default quota. A typical
-  sync of 500 subscriptions costs ~30 units (1 per `channels.list` call of
-  50 ids). Easy to stay under.
-- **No delta sync.** Every sync walks the full subscriptions list. Fine for
-  <5000 subs; will want delta queries in Phase 2.
 
 ## License
 

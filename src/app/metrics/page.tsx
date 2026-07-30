@@ -11,9 +11,11 @@ export const metadata = {
   description: 'Your most-watched channels, most-summarized videos, and top topics.',
 };
 
-export default function MetricsPage() {
-  const connected = isConnected();
-  const m = getMetrics();
+export default async function MetricsPage() {
+  const [connected, m] = await Promise.all([
+    isConnected(),
+    getMetrics(),
+  ]);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>

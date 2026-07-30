@@ -20,13 +20,11 @@ export interface VideoSyncResult {
 }
 
 /**
- * Refresh recent uploads for a channel. Requires the channel to already exist
- * in our DB (we look it up for the title/thumbnail fallback) and the user to be
- * connected to YouTube.
+ * Refresh recent uploads for a channel.
  */
 export async function syncChannelVideos(channelId: string, max = 30): Promise<VideoSyncResult> {
   const result: VideoSyncResult = { channelId, fetched: 0, errors: [] };
-  const channel = getChannel(channelId);
+  const channel = await getChannel(channelId);
   if (!channel) {
     result.errors.push('Channel not found in local DB');
     return result;
@@ -54,7 +52,7 @@ export async function syncChannelVideos(channelId: string, max = 30): Promise<Vi
       const snip = det?.snippet ?? item.snippet;
       if (!snip) continue;
 
-      upsertVideo({
+      await upsertVideo({
         video_id: videoId,
         channel_id: channelId,
         title: snip.title ?? '(untitled)',

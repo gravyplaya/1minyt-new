@@ -1,5 +1,5 @@
 /**
- * OAuth tokens persist in SQLite so the user only has to authorize once.
+ * OAuth tokens persist in Postgres so the user only has to authorize once.
  *
  * The user_id is hardcoded to "me" because this is a personal-MVP single-user
  * app. Phase 2 (multi-user) will swap this for a real users table.
@@ -16,43 +16,59 @@ interface TokenRow {
   updated_at: number;
 }
 
-export function saveTokens(userId: string, accessToken: string, refreshToken: string, expiryDate: number | null): void {
-  getDb().prepare(`
-    INSERT INTO oauth_tokens (user_id, access_token, refresh_token, expiry_date, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      access_token=excluded.access_token,
-      refresh_token=excluded.refresh_token,
-      expiry_date=excluded.expiry_date,
-      updated_at=excluded.updated_at
-  `).run(userId, accessToken, refreshToken, expiryDate, Math.floor(Date.now() / 1000));
+export async function saveTokens(userId: string, accessToken: string, refreshToken: string, expiryDate: number | null): Promise<void> {
+  const client = await getDb();
+  try {
+    await client.query(
+      `INSERT INTO oauth_tokens (user_id, access_token, refresh_token, expiry_date, updated_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT(user_id) DO UPDATE SET
+        access_token=excluded.access_token,
+        refresh_token=excluded.refresh_token,
+        expiry_date=excluded.expiry_date,
+        updated_at=excluded.updated_at`,
+      [userId, accessToken, refreshToken, expiryDate, Math.floor(Date.now() / 1000)],
+    );
+  } finally {
+    client.release();
+  }
 }
 
-export function loadTokens(userId: string): TokenRow | null {
-  return getDb().prepare('SELECT * FROM oauth_tokens WHERE user_id = ?').get(userId) as TokenRow | null;
+export async function loadTokens(userId: string): Promise<TokenRow | null> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query<TokenRow>('SELECT * FROM oauth_tokens WHERE user_id = $1', [userId]);
+    return rows[0] ?? null;
+  } finally {
+    client.release();
+  }
 }
 
-export function clearTokens(userId: string): void {
-  getDb().prepare('DELETE FROM oauth_tokens WHERE user_id = ?').run(userId);
+export async function clearTokens(userId: string): Promise<void> {
+  const client = await getDb();
+  try {
+    await client.query('DELETE FROM oauth_tokens WHERE user_id = $1', [userId]);
+  } finally {
+    client.release();
+  }
 }
 
-export function isConnected(userId = 'me'): boolean {
-  return loadTokens(userId)?.refresh_token ? true : false;
+export async function isConnected(userId = 'me'): Promise<boolean> {
+  const tokens = await loadTokens(userId);
+  return tokens?.refresh_token ? true : false;
 }
 
 /**
  * Return an access token, refreshing if it's within 60s of expiry.
  */
 export async function getValidAccessToken(userId = 'me'): Promise<string> {
-  const tokens = loadTokens(userId);
+  const tokens = await loadTokens(userId);
   if (!tokens) throw new Error('Not connected — authorize first');
-  // Google's OAuth2 client stores expiry_date in milliseconds (epoch ms).
-  // Compare against Date.now() (also ms) — NOT seconds.
   const nowMs = Date.now();
   if (tokens.expiry_date && tokens.expiry_date - nowMs > 60_000) {
     return tokens.access_token;
   }
   const refreshed = await refreshAccessToken(tokens.refresh_token);
-  saveTokens(userId, refreshed.access_token, tokens.refresh_token, refreshed.expiry_date);
+  await saveTokens(userId, refreshed.access_token, tokens.refresh_token, refreshed.expiry_date);
   return refreshed.access_token;
 }

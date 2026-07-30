@@ -1,10 +1,6 @@
 /**
  * TAV-6: Basic Metrics — read-only query layer over interaction data already
  * stored by the summarizer (summaries) and chat (chat_messages) features.
- *
- * No new tables or data collection. Every function here is a cheap SQLite
- * aggregate over existing rows. The dashboard at /metrics consumes the union
- * of these results.
  */
 
 import { getDb } from './db';
@@ -16,9 +12,9 @@ export interface ChannelInteraction {
   title: string;
   thumbnail_url: string | null;
   handle: string | null;
-  summaries: number;      // number of summaries generated for this channel
-  chats: number;         // number of user-side chat messages for this channel
-  total: number;         // summaries + chats — the combined interaction score
+  summaries: number;
+  chats: number;
+  total: number;
 }
 
 export interface VideoInteraction {
@@ -30,11 +26,10 @@ export interface VideoInteraction {
   summaries: number;
   chats: number;
   total: number;
-  last_interaction: number | null;  // unix seconds of most recent summary or chat
+  last_interaction: number | null;
 }
 
 export interface TopicCount {
-  /** folder or tag id (or 'untagged' for the catch-all bucket) */
   id: string;
   name: string;
   color: string | null;
@@ -59,190 +54,193 @@ export interface MetricsResult {
 
 // ----- queries ---------------------------------------------------------------
 
-/**
- * Top channels by combined interaction (summaries + user chat messages).
- * A channel ranks higher when you summarize its videos more often and ask
- * more questions about those videos.
- */
-export function topChannelsByInteraction(limit = 10): ChannelInteraction[] {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT
-      c.channel_id,
-      c.title,
-      c.thumbnail_url,
-      c.handle,
-      COALESCE(s.cnt, 0) AS summaries,
-      COALESCE(ch.cnt, 0) AS chats,
-      (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) AS total
-    FROM channels c
-    LEFT JOIN (
-      SELECT v.channel_id, COUNT(*) AS cnt
-      FROM summaries sm
-      JOIN videos v ON v.video_id = sm.video_id
-      GROUP BY v.channel_id
-    ) s ON s.channel_id = c.channel_id
-    LEFT JOIN (
-      SELECT v.channel_id, COUNT(*) AS cnt
-      FROM chat_messages cm
-      JOIN videos v ON v.video_id = cm.video_id
-      WHERE cm.role = 'user'
-      GROUP BY v.channel_id
-    ) ch ON ch.channel_id = c.channel_id
-    WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
-    ORDER BY total DESC, summaries DESC, c.title COLLATE NOCASE ASC
-    LIMIT ?
-  `).all(limit) as ChannelInteraction[];
-  return rows;
+export async function topChannelsByInteraction(limit = 10): Promise<ChannelInteraction[]> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query<ChannelInteraction>(
+      `SELECT
+        c.channel_id,
+        c.title,
+        c.thumbnail_url,
+        c.handle,
+        COALESCE(s.cnt, 0) AS summaries,
+        COALESCE(ch.cnt, 0) AS chats,
+        (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) AS total
+      FROM channels c
+      LEFT JOIN (
+        SELECT v.channel_id, COUNT(*) AS cnt
+        FROM summaries sm
+        JOIN videos v ON v.video_id = sm.video_id
+        GROUP BY v.channel_id
+      ) s ON s.channel_id = c.channel_id
+      LEFT JOIN (
+        SELECT v.channel_id, COUNT(*) AS cnt
+        FROM chat_messages cm
+        JOIN videos v ON v.video_id = cm.video_id
+        WHERE cm.role = 'user'
+        GROUP BY v.channel_id
+      ) ch ON ch.channel_id = c.channel_id
+      WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
+      ORDER BY total DESC, summaries DESC, c.title ASC
+      LIMIT $1`,
+      [limit],
+    );
+    return rows;
+  } finally {
+    client.release();
+  }
 }
 
-/**
- * Most-summarized / most-chatted videos across all channels.
- */
-export function topVideosByInteraction(limit = 10): VideoInteraction[] {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT
-      v.video_id,
-      v.title,
-      v.thumbnail_url,
-      v.channel_id,
-      c.title AS channel_title,
-      COALESCE(s.cnt, 0) AS summaries,
-      COALESCE(ch.cnt, 0) AS chats,
-      (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) AS total,
-      COALESCE(s.last_ts, ch.last_ts) AS last_interaction
-    FROM videos v
-    JOIN channels c ON c.channel_id = v.channel_id
-    LEFT JOIN (
-      SELECT video_id, COUNT(*) AS cnt, MAX(created_at) AS last_ts
-      FROM summaries
-      GROUP BY video_id
-    ) s ON s.video_id = v.video_id
-    LEFT JOIN (
-      SELECT video_id, COUNT(*) AS cnt, MAX(created_at) AS last_ts
-      FROM chat_messages
-      WHERE role = 'user'
-      GROUP BY video_id
-    ) ch ON ch.video_id = v.video_id
-    WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
-    ORDER BY total DESC, summaries DESC, v.title COLLATE NOCASE ASC
-    LIMIT ?
-  `).all(limit) as (VideoInteraction & { last_interaction: number | null })[];
-  return rows.map(r => ({
-    ...r,
-    last_interaction: r.last_interaction ?? null,
-  }));
+export async function topVideosByInteraction(limit = 10): Promise<VideoInteraction[]> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query(
+      `SELECT
+        v.video_id,
+        v.title,
+        v.thumbnail_url,
+        v.channel_id,
+        c.title AS channel_title,
+        COALESCE(s.cnt, 0) AS summaries,
+        COALESCE(ch.cnt, 0) AS chats,
+        (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) AS total,
+        COALESCE(s.last_ts, ch.last_ts) AS last_interaction
+      FROM videos v
+      JOIN channels c ON c.channel_id = v.channel_id
+      LEFT JOIN (
+        SELECT video_id, COUNT(*) AS cnt, MAX(created_at) AS last_ts
+        FROM summaries
+        GROUP BY video_id
+      ) s ON s.video_id = v.video_id
+      LEFT JOIN (
+        SELECT video_id, COUNT(*) AS cnt, MAX(created_at) AS last_ts
+        FROM chat_messages
+        WHERE role = 'user'
+        GROUP BY video_id
+      ) ch ON ch.video_id = v.video_id
+      WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
+      ORDER BY total DESC, summaries DESC, v.title ASC
+      LIMIT $1`,
+      [limit],
+    );
+    return rows.map((r: any) => ({
+      ...r,
+      last_interaction: r.last_interaction ?? null,
+    })) as VideoInteraction[];
+  } finally {
+    client.release();
+  }
 }
 
-/**
- * Topics the user engages with most, derived from folder/tag assignments on
- * channels they interact with. Interactions flow through the channel — a video
- * belongs to a channel, a channel belongs to folders and tags — so we count
- * each channel's interaction total against every folder and tag that channel
- * is a member of. Channels with no folder or tag assignment roll up into an
- * "untagged" bucket.
- */
-export function topTopicsByInteraction(limit = 10): TopicCount[] {
-  const db = getDb();
-
-  // Per-channel interaction totals (same logic as topChannelsByInteraction,
-  // but we only need the channel_id + total columns here).
-  const channelTotals = db.prepare(`
-    SELECT c.channel_id,
-           (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) AS total
-    FROM channels c
-    LEFT JOIN (
-      SELECT v.channel_id, COUNT(*) AS cnt
-      FROM summaries sm JOIN videos v ON v.video_id = sm.video_id
-      GROUP BY v.channel_id
-    ) s ON s.channel_id = c.channel_id
-    LEFT JOIN (
-      SELECT v.channel_id, COUNT(*) AS cnt
-      FROM chat_messages cm JOIN videos v ON v.video_id = cm.video_id
-      WHERE cm.role = 'user'
-      GROUP BY v.channel_id
-    ) ch ON ch.channel_id = c.channel_id
-    WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
-  `).all() as { channel_id: string; total: number }[];
-
-  const totalMap = new Map(channelTotals.map(r => [r.channel_id, r.total]));
-
-  // Folder rollup.
-  const folderRows = db.prepare(`
-    SELECT cf.folder_id AS id, f.name, f.color, cf.channel_id
-    FROM channel_folders cf
-    JOIN folders f ON f.id = cf.folder_id
-  `).all() as { id: string; name: string; color: string | null; channel_id: string }[];
-
-  // Tag rollup.
-  const tagRows = db.prepare(`
-    SELECT ct.tag_id AS id, t.name, t.color, ct.channel_id
-    FROM channel_tags ct
-    JOIN tags t ON t.id = ct.tag_id
-  `).all() as { id: string; name: string; color: string | null; channel_id: string }[];
-
-  const topicMap = new Map<string, TopicCount>();
-  const seenChannels = new Set<string>();
-
-  function bump(key: string, name: string, color: string | null, kind: TopicCount['kind'], channelId: string) {
-    const t = totalMap.get(channelId);
-    if (!t) return;
-    seenChannels.add(channelId);
-    const existing = topicMap.get(key);
-    if (existing) {
-      existing.total += t;
-    } else {
-      topicMap.set(key, { id: key, name, color, kind, total: t });
+export async function topTopicsByInteraction(limit = 10): Promise<TopicCount[]> {
+  const client = await getDb();
+  try {
+    // Per-channel interaction totals
+    const { rows: channelTotals } = await client.query(
+      `SELECT c.channel_id,
+             (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) AS total
+      FROM channels c
+      LEFT JOIN (
+        SELECT v.channel_id, COUNT(*) AS cnt
+        FROM summaries sm JOIN videos v ON v.video_id = sm.video_id
+        GROUP BY v.channel_id
+      ) s ON s.channel_id = c.channel_id
+      LEFT JOIN (
+        SELECT v.channel_id, COUNT(*) AS cnt
+        FROM chat_messages cm JOIN videos v ON v.video_id = cm.video_id
+        WHERE cm.role = 'user'
+        GROUP BY v.channel_id
+      ) ch ON ch.channel_id = c.channel_id
+      WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0`,
+    );
+    const totalMap = new Map<string, number>();
+    for (const r of channelTotals as { channel_id: string; total: string | number }[]) {
+      totalMap.set(r.channel_id, Number(r.total));
     }
-  }
 
-  for (const f of folderRows) bump(`folder:${f.id}`, f.name, f.color, 'folder', f.channel_id);
-  for (const t of tagRows) bump(`tag:${t.id}`, t.name, t.color, 'tag', t.channel_id);
+    const { rows: folderRows } = await client.query(
+      `SELECT cf.folder_id AS id, f.name, f.color, cf.channel_id
+       FROM channel_folders cf
+       JOIN folders f ON f.id = cf.folder_id`,
+    );
+    const { rows: tagRows } = await client.query(
+      `SELECT ct.tag_id AS id, t.name, t.color, ct.channel_id
+       FROM channel_tags ct
+       JOIN tags t ON t.id = ct.tag_id`,
+    );
 
-  // Untagged bucket: channels with interactions but no folder or tag assignment.
-  let untaggedTotal = 0;
-  for (const [channelId, total] of totalMap) {
-    if (!seenChannels.has(channelId)) untaggedTotal += total;
-  }
-  if (untaggedTotal > 0) {
-    topicMap.set('untagged', { id: 'untagged', name: 'Untagged', color: null, kind: 'untagged', total: untaggedTotal });
-  }
+    const topicMap = new Map<string, TopicCount>();
+    const seenChannels = new Set<string>();
 
-  return [...topicMap.values()]
-    .sort((a, b) => b.total - a.total)
-    .slice(0, limit);
+    function bump(key: string, name: string, color: string | null, kind: TopicCount['kind'], channelId: string) {
+      const t = totalMap.get(channelId);
+      if (!t) return;
+      seenChannels.add(channelId);
+      const existing = topicMap.get(key);
+      if (existing) {
+        existing.total += t;
+      } else {
+        topicMap.set(key, { id: key, name, color, kind, total: t });
+      }
+    }
+
+    for (const f of folderRows as { id: string; name: string; color: string | null; channel_id: string }[]) {
+      bump(`folder:${f.id}`, f.name, f.color, 'folder', f.channel_id);
+    }
+    for (const t of tagRows as { id: string; name: string; color: string | null; channel_id: string }[]) {
+      bump(`tag:${t.id}`, t.name, t.color, 'tag', t.channel_id);
+    }
+
+    // Untagged bucket
+    let untaggedTotal = 0;
+    for (const [channelId, total] of totalMap) {
+      if (!seenChannels.has(channelId)) untaggedTotal += total;
+    }
+    if (untaggedTotal > 0) {
+      topicMap.set('untagged', { id: 'untagged', name: 'Untagged', color: null, kind: 'untagged', total: untaggedTotal });
+    }
+
+    return [...topicMap.values()].sort((a, b) => b.total - a.total).slice(0, limit);
+  } finally {
+    client.release();
+  }
 }
 
-/** Headline numbers for the dashboard header. */
-export function metricsSummary(): MetricsSummary {
-  const db = getDb();
-  const one = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+export async function metricsSummary(): Promise<MetricsSummary> {
+  const client = await getDb();
+  try {
+    const one = async (sql: string): Promise<number> => {
+      const { rows } = await client.query(sql);
+      return Number(rows[0].n);
+    };
 
-  const total_channels = one(`SELECT COUNT(DISTINCT v.channel_id) AS n
-                              FROM summaries sm JOIN videos v ON v.video_id = sm.video_id`);
-  const total_videos_cached = one(`SELECT COUNT(DISTINCT video_id) AS n
-                                   FROM (SELECT video_id FROM summaries
-                                         UNION
-                                         SELECT video_id FROM chat_messages WHERE role = 'user')`);
-  const total_summaries = one('SELECT COUNT(*) AS n FROM summaries');
-  const total_chats = one(`SELECT COUNT(*) AS n FROM chat_messages WHERE role = 'user'`);
+    const total_channels = await one(`SELECT COUNT(DISTINCT v.channel_id) AS n
+                                      FROM summaries sm JOIN videos v ON v.video_id = sm.video_id`);
+    const total_videos_cached = await one(`SELECT COUNT(DISTINCT video_id) AS n
+                                            FROM (SELECT video_id FROM summaries
+                                                  UNION
+                                                  SELECT video_id FROM chat_messages WHERE role = 'user') AS t`);
+    const total_summaries = await one('SELECT COUNT(*) AS n FROM summaries');
+    const total_chats = await one(`SELECT COUNT(*) AS n FROM chat_messages WHERE role = 'user'`);
 
-  return {
-    total_channels,
-    total_videos_cached,
-    total_summaries,
-    total_chats,
-    total_interactions: total_summaries + total_chats,
-  };
+    return {
+      total_channels,
+      total_videos_cached,
+      total_summaries,
+      total_chats,
+      total_interactions: total_summaries + total_chats,
+    };
+  } finally {
+    client.release();
+  }
 }
 
-/** Convenience: all the dashboard data in one call. */
-export function getMetrics(): MetricsResult {
-  return {
-    summary: metricsSummary(),
-    top_channels: topChannelsByInteraction(10),
-    top_videos: topVideosByInteraction(10),
-    top_topics: topTopicsByInteraction(10),
-  };
+export async function getMetrics(): Promise<MetricsResult> {
+  const [summary, top_channels, top_videos, top_topics] = await Promise.all([
+    metricsSummary(),
+    topChannelsByInteraction(10),
+    topVideosByInteraction(10),
+    topTopicsByInteraction(10),
+  ]);
+  return { summary, top_channels, top_videos, top_topics };
 }

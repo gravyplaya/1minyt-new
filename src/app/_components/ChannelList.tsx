@@ -26,8 +26,8 @@ const SORT_OPTIONS = [
   { value: 'updated',     label: 'Recently updated' },
 ] as const;
 
-export function ChannelList({ search, folderId, tagId, showMusic, showHidden, sort, dir, folders, tags, urlWith }: Props) {
-  const channels = queryChannelsFromParams({ q: search, folder: folderId, tag: tagId, sort, dir, showMusic: showMusic ? '1' : undefined, showHidden: showHidden ? '1' : undefined });
+export async function ChannelList({ search, folderId, tagId, showMusic, showHidden, sort, dir, folders, tags, urlWith }: Props) {
+  const channels = await queryChannelsFromParams({ q: search, folder: folderId, tag: tagId, sort, dir, showMusic: showMusic ? '1' : undefined, showHidden: showHidden ? '1' : undefined });
 
   const folderById = new Map(folders.map(f => [f.id, f] as const));
   const tagById = new Map(tags.map(t => [t.id, t] as const));
