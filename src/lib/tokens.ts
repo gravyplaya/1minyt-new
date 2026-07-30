@@ -17,6 +17,9 @@ interface TokenRow {
 }
 
 export async function saveTokens(userId: string, accessToken: string, refreshToken: string, expiryDate: number | null): Promise<void> {
+  // Google returns expiry_date in milliseconds; store as seconds to fit INTEGER
+  // (consistent with updated_at and all other timestamp columns in the schema).
+  const expirySec = expiryDate !== null ? Math.floor(expiryDate / 1000) : null;
   const client = await getDb();
   try {
     await client.query(
@@ -27,7 +30,7 @@ export async function saveTokens(userId: string, accessToken: string, refreshTok
         refresh_token=excluded.refresh_token,
         expiry_date=excluded.expiry_date,
         updated_at=excluded.updated_at`,
-      [userId, accessToken, refreshToken, expiryDate, Math.floor(Date.now() / 1000)],
+      [userId, accessToken, refreshToken, expirySec, Math.floor(Date.now() / 1000)],
     );
   } finally {
     client.release();
@@ -64,8 +67,8 @@ export async function isConnected(userId = 'me'): Promise<boolean> {
 export async function getValidAccessToken(userId = 'me'): Promise<string> {
   const tokens = await loadTokens(userId);
   if (!tokens) throw new Error('Not connected — authorize first');
-  const nowMs = Date.now();
-  if (tokens.expiry_date && tokens.expiry_date - nowMs > 60_000) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (tokens.expiry_date && tokens.expiry_date - nowSec > 60) {
     return tokens.access_token;
   }
   const refreshed = await refreshAccessToken(tokens.refresh_token);
