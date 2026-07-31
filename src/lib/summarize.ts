@@ -31,6 +31,8 @@ export interface SummarizeResult {
   tldr: string;
   keyPoints: string[];
   followUps: FollowUp[];
+  /** 2–5 short topic tags extracted from the transcript (lowercase). */
+  topics: string[];
   model: string;
   prompt: string;
   tokenCount: number | null;
@@ -99,6 +101,7 @@ export async function summarizeVideo(input: SummarizeInput): Promise<SummarizeRe
     tldr: parsed.tldr,
     keyPoints: parsed.key_points,
     followUps: parsed.follow_ups,
+    topics: parsed.topics,
     model,
     prompt,
     tokenCount: data.usage?.total_tokens ?? null,
@@ -138,6 +141,7 @@ function buildPrompt(p: PromptParts): string {
     '- "tldr": 1-2 sentence summary of what the video actually covers.',
     '- "key_points": 3-7 concrete takeaways a viewer would want to remember (array of strings).',
     '- "follow_ups": 0-3 entries picked ONLY from the recent uploads list above. Each is an object with "video_id", "title", and "reason" (one-line reason). If none fit, return an empty array.',
+    '- "topics": 2-5 short topic tags describing what the video is about (array of strings, single words or short phrases, lowercase, no punctuation).',
   ].join('\n');
 }
 
@@ -145,9 +149,10 @@ interface RawSummary {
   tldr?: unknown;
   key_points?: unknown;
   follow_ups?: unknown;
+  topics?: unknown;
 }
 
-function parseSummary(content: string): { tldr: string; key_points: string[]; follow_ups: FollowUp[] } {
+function parseSummary(content: string): { tldr: string; key_points: string[]; follow_ups: FollowUp[]; topics: string[] } {
   let raw: RawSummary;
   try {
     raw = JSON.parse(content) as RawSummary;
@@ -180,5 +185,10 @@ function parseSummary(content: string): { tldr: string; key_points: string[]; fo
         .filter((f): f is FollowUp => f !== null)
     : [];
 
-  return { tldr, key_points: keyPoints, follow_ups: followUps };
+  // Topics: tolerate missing/fewer/more than 2–5, normalize to lowercase.
+  const topics: string[] = Array.isArray(raw.topics)
+    ? raw.topics.map(String).map(s => s.trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  return { tldr, key_points: keyPoints, follow_ups: followUps, topics };
 }

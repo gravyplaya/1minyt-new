@@ -14,23 +14,38 @@ interface TokenRow {
   refresh_token: string;
   expiry_date: number | null;
   updated_at: number;
+  display_name: string | null;
+  avatar_url: string | null;
 }
 
-export async function saveTokens(userId: string, accessToken: string, refreshToken: string, expiryDate: number | null): Promise<void> {
+export interface UserProfile {
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
+export async function saveTokens(
+  userId: string,
+  accessToken: string,
+  refreshToken: string,
+  expiryDate: number | null,
+  profile?: UserProfile,
+): Promise<void> {
   // Google returns expiry_date in milliseconds; store as seconds to fit INTEGER
   // (consistent with updated_at and all other timestamp columns in the schema).
   const expirySec = expiryDate !== null ? Math.floor(expiryDate / 1000) : null;
   const client = await getDb();
   try {
     await client.query(
-      `INSERT INTO oauth_tokens (user_id, access_token, refresh_token, expiry_date, updated_at)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO oauth_tokens (user_id, access_token, refresh_token, expiry_date, updated_at, display_name, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT(user_id) DO UPDATE SET
         access_token=excluded.access_token,
         refresh_token=excluded.refresh_token,
         expiry_date=excluded.expiry_date,
-        updated_at=excluded.updated_at`,
-      [userId, accessToken, refreshToken, expirySec, Math.floor(Date.now() / 1000)],
+        updated_at=excluded.updated_at,
+        display_name=excluded.display_name,
+        avatar_url=excluded.avatar_url`,
+      [userId, accessToken, refreshToken, expirySec, Math.floor(Date.now() / 1000), profile?.displayName ?? null, profile?.avatarUrl ?? null],
     );
   } finally {
     client.release();
@@ -72,6 +87,16 @@ export async function getValidAccessToken(userId = 'me'): Promise<string> {
     return tokens.access_token;
   }
   const refreshed = await refreshAccessToken(tokens.refresh_token);
-  await saveTokens(userId, refreshed.access_token, tokens.refresh_token, refreshed.expiry_date);
+  // Preserve the existing profile when refreshing the access token.
+  await saveTokens(userId, refreshed.access_token, tokens.refresh_token, refreshed.expiry_date, {
+    displayName: tokens.display_name,
+    avatarUrl: tokens.avatar_url,
+  });
   return refreshed.access_token;
+}
+
+export async function getUserProfile(userId = 'me'): Promise<UserProfile | null> {
+  const tokens = await loadTokens(userId);
+  if (!tokens) return null;
+  return { displayName: tokens.display_name, avatarUrl: tokens.avatar_url };
 }

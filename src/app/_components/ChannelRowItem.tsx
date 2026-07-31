@@ -66,7 +66,7 @@ export function ChannelRowItem({
           </div>
         </div>
       </Link>
-      <div style={{ textAlign: 'right', color: '#8b8b94', fontSize: 12, whiteSpace: 'nowrap' }}>
+      <div className="channel-row-stats" style={{ textAlign: 'right', color: '#8b8b94', fontSize: 12, whiteSpace: 'nowrap' }}>
         <div>{formatCount(channel.subscriber_count)} subscribers</div>
         <div>{formatCount(channel.video_count)} videos</div>
         <Link
@@ -96,7 +96,7 @@ export function ChannelRowItem({
 function Thumb({ url, alt }: { url: string | null; alt: string }) {
   if (!url) {
     return (
-      <div style={{ width: 64, height: 64, borderRadius: 32, background: '#1f1f26', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5a5a64', fontSize: 18, fontWeight: 600 }}>
+      <div className="channel-row-thumb" style={{ width: 64, height: 64, borderRadius: 32, background: '#1f1f26', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5a5a64', fontSize: 18, fontWeight: 600 }}>
         {alt[0]?.toUpperCase() ?? '?'}
       </div>
     );
@@ -108,6 +108,7 @@ function Thumb({ url, alt }: { url: string | null; alt: string }) {
       width={64}
       height={64}
       unoptimized
+      className="channel-row-thumb"
       style={{ borderRadius: 32, objectFit: 'cover', width: 64, height: 64, background: '#1f1f26' }}
     />
   );

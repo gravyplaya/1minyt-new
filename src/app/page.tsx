@@ -1,12 +1,14 @@
 import Link from 'next/link';
-import { countChannels } from '@/lib/queries';
+import { countChannels, CHANNEL_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '@/lib/queries';
 import { listFolders, listTags, latestSyncRun } from '@/lib/repo';
-import { isConnected } from '@/lib/tokens';
+import { isConnected, getUserProfile } from '@/lib/tokens';
 import { SyncButton } from './_components/SyncButton';
+import { ExportButton } from './_components/ExportButton';
 import { AddFolderForm, AddTagForm } from './_components/AddFolderTagForms';
 import { disconnectAction } from '@/app/actions';
 import { HeaderBar } from './_components/HeaderBar';
 import { ChannelList } from './_components/ChannelList';
+import { ResponsiveSidebar } from './_components/ResponsiveSidebar';
 
 interface PageProps {
   searchParams: Promise<{
@@ -17,13 +19,16 @@ interface PageProps {
     dir?: string;
     showMusic?: string;
     showHidden?: string;
+    page?: string;
+    pageSize?: string;
   }>;
 }
 
 export default async function HomePage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const [connected, lastSync, folders, tags, counts] = await Promise.all([
+  const [connected, profile, lastSync, folders, tags, counts] = await Promise.all([
     isConnected(),
+    getUserProfile(),
     latestSyncRun(),
     listFolders(),
     listTags(),
@@ -37,6 +42,10 @@ export default async function HomePage({ searchParams }: PageProps) {
   const showHidden = params.showHidden === '1';
   const sort = (params.sort as 'recent' | 'alpha' | 'alpha-desc' | 'subscribers' | 'videos' | 'updated') ?? 'alpha';
   const dir = (params.dir as 'asc' | 'desc') ?? undefined;
+  const page = Math.max(1, parseInt(params.page ?? '1', 10) || 1);
+  const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize) as typeof PAGE_SIZE_OPTIONS[number])
+    ? Number(params.pageSize)
+    : CHANNEL_PAGE_SIZE;
 
   const baseQuery: Record<string, string> = {};
   if (search) baseQuery.q = search;
@@ -46,6 +55,7 @@ export default async function HomePage({ searchParams }: PageProps) {
   if (showHidden) baseQuery.showHidden = '1';
   if (sort !== 'alpha') baseQuery.sort = sort;
   if (dir) baseQuery.dir = dir;
+  if (pageSize !== CHANNEL_PAGE_SIZE) baseQuery.pageSize = String(pageSize);
 
   function urlWith(overrides: Record<string, string | null | undefined>): string {
     const merged = { ...baseQuery };
@@ -59,11 +69,11 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} />
+      <HeaderBar connected={connected} profile={profile} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', flex: 1 }}>
+      <div className="app-grid" style={{ display: 'grid', gridTemplateColumns: '280px 1fr', flex: 1 }}>
         {/* Sidebar */}
-        <aside style={{ borderRight: '1px solid #2a2a33', background: '#0e0e12', padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+        <ResponsiveSidebar>
           <section>
             <h3 style={sidebarHeading}>Library</h3>
             <SidebarLink href={urlWith({ folder: null, tag: null, showMusic: null })} active={!activeFolder && !activeTag && !showMusic}>
@@ -125,20 +135,25 @@ export default async function HomePage({ searchParams }: PageProps) {
             </div>
           </section>
 
-          <div style={{ marginTop: 'auto', borderTop: '1px solid #2a2a33', paddingTop: 16 }}>
+          <div style={{ marginTop: 'auto', borderTop: '1px solid #2a2a33', paddingTop: 16, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <SyncButton lastSync={lastSync?.started_at ?? null} />
             {connected && (
-              <form action={disconnectAction} style={{ marginTop: 8 }}>
+              <div style={{ marginTop: 8, width: '100%' }}>
+                <ExportButton />
+              </div>
+            )}
+            {connected && (
+              <form action={disconnectAction} style={{ marginTop: 8, width: '100%' }}>
                 <button className="btn btn-ghost" type="submit" style={{ fontSize: 11, width: '100%' }}>
                   Disconnect YouTube
                 </button>
               </form>
             )}
           </div>
-        </aside>
+        </ResponsiveSidebar>
 
         {/* Main */}
-        <main style={{ padding: '24px 32px', overflow: 'auto' }}>
+        <main className="main-content" style={{ padding: '24px 32px', overflow: 'auto' }}>
           {!connected ? (
             <ConnectPrompt />
           ) : counts.total === 0 ? (
@@ -152,6 +167,8 @@ export default async function HomePage({ searchParams }: PageProps) {
               showHidden={showHidden}
               sort={sort}
               dir={dir}
+              page={page}
+              pageSize={pageSize}
               folders={folders}
               tags={tags}
               urlWith={urlWith}

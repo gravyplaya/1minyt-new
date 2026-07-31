@@ -23,12 +23,13 @@ export function ChannelToolbar({ search, folderId, tagId, showMusic, showHidden,
 
   return (
     <form
+      className="toolbar-form"
       action="/"
       method="get"
       style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap', alignItems: 'center' }}
     >
       <input
-        className="input"
+        className="input toolbar-search"
         type="search"
         name="q"
         defaultValue={search}

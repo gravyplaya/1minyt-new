@@ -6,8 +6,9 @@ import { listVideosByChannel } from '@/lib/video-repo';
 import { HeaderBar } from '../../_components/HeaderBar';
 import { ChannelEditor } from '../../_components/ChannelEditor';
 import { VideosPanel } from '../../_components/VideosPanel';
+import { ExportButton } from '../../_components/ExportButton';
 import { formatCount, formatRelative, youtubeChannelUrl } from '../../_lib/format';
-import { isConnected } from '@/lib/tokens';
+import { isConnected, getUserProfile } from '@/lib/tokens';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,21 +21,22 @@ export default async function ChannelPage({ params }: Props) {
   const channel = await getChannel(id);
   if (!channel) notFound();
 
-  const [folders, tags, connected, videos] = await Promise.all([
+  const [folders, tags, connected, profile, videos] = await Promise.all([
     listFolders(),
     listTags(),
     isConnected(),
+    getUserProfile(),
     listVideosByChannel(channel.channel_id, 30),
   ]);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} />
-      <main style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+      <HeaderBar connected={connected} profile={profile} />
+      <main className="channel-detail-main" style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 14 }}>
           <Link href="/" style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to subscriptions</Link>
         </div>
-        <header style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 28 }}>
+        <header className="channel-header" style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 28 }}>
           {channel.thumbnail_url ? (
             <Image
               src={channel.thumbnail_url}
@@ -42,20 +44,21 @@ export default async function ChannelPage({ params }: Props) {
               width={96}
               height={96}
               unoptimized
+              className="channel-avatar"
               style={{ borderRadius: 48, objectFit: 'cover', background: '#1f1f26' }}
             />
           ) : (
-            <div style={{ width: 96, height: 96, borderRadius: 48, background: '#1f1f26', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5a5a64', fontSize: 32, fontWeight: 700 }}>
+            <div className="channel-avatar" style={{ width: 96, height: 96, borderRadius: 48, background: '#1f1f26', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5a5a64', fontSize: 32, fontWeight: 700 }}>
               {channel.title[0]?.toUpperCase() ?? '?'}
             </div>
           )}
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="channel-header-info" style={{ flex: 1, minWidth: 0 }}>
             <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 10 }}>
               {channel.title}
               {channel.music_flag === 1 && <span className="chip chip-music">🎵 music</span>}
               {channel.hidden === 1 && <span className="chip">hidden</span>}
             </h1>
-            <div style={{ color: '#8b8b94', fontSize: 13, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="channel-header-meta" style={{ color: '#8b8b94', fontSize: 13, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               {channel.handle && <span>{channel.handle}</span>}
               {channel.custom_url && <span>{channel.custom_url}</span>}
               {channel.country && <span>{channel.country}</span>}
@@ -75,6 +78,10 @@ export default async function ChannelPage({ params }: Props) {
         </header>
 
         <ChannelEditor channel={channel} folders={folders} tags={tags} />
+
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <ExportButton channelId={channel.channel_id} summaryCount={videos.filter(v => v.summary).length} />
+        </div>
 
         <VideosPanel channelId={channel.channel_id} initialVideos={videos} connected={connected} />
       </main>

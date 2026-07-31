@@ -104,3 +104,180 @@ button { font: inherit; }
   padding: 1px 6px;
   color: #8b8b94;
 }
+
+/* ===== Responsive layout ===== */
+
+/* Sidebar toggle — hidden on desktop, shown on mobile */
+.sidebar-toggle {
+  display: none;
+}
+.sidebar-overlay {
+  display: none;
+}
+.sidebar-close {
+  display: none;
+}
+
+/* Tablet and mobile */
+@media (max-width: 768px) {
+  /* Header */
+  .header-bar {
+    padding: 10px 16px !important;
+  }
+  .header-subtitle {
+    display: none !important;
+  }
+  .header-meta {
+    gap: 10px !important;
+    font-size: 11px !important;
+  }
+
+  /* App grid — stack to single column */
+  .app-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Sidebar becomes a slide-in drawer */
+  .sidebar-toggle {
+    display: inline-flex !important;
+  }
+  .sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    overflow-y: auto;
+    border-right: 1px solid #2a2a33 !important;
+    background: #0e0e12 !important;
+  }
+  .sidebar-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+  }
+  .sidebar-overlay {
+    display: block !important;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 150;
+  }
+  .sidebar-close {
+    display: inline-flex !important;
+  }
+
+  /* Main content */
+  .main-content {
+    padding: 16px !important;
+  }
+
+  /* Channel row — smaller thumb, stats move to second row */
+  .channel-row {
+    grid-template-columns: 48px 1fr !important;
+    gap: 10px !important;
+    padding: 10px 12px !important;
+  }
+  .channel-row-thumb {
+    width: 48px !important;
+    height: 48px !important;
+    border-radius: 24px !important;
+  }
+  .channel-row-stats {
+    grid-column: 1 / -1 !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    text-align: left !important;
+    padding-top: 8px !important;
+    border-top: 1px solid #2a2a33 !important;
+    white-space: normal !important;
+  }
+
+  /* Channel summary row — stack vertically */
+  .channel-summary {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+  }
+  .channel-summary-controls {
+    width: 100% !important;
+    justify-content: space-between !important;
+  }
+
+  /* Toolbar — stack search above controls */
+  .toolbar-form {
+    flex-direction: column !important;
+  }
+  .toolbar-search {
+    flex: none !important;
+    width: 100% !important;
+  }
+
+  /* Channel detail page */
+  .channel-detail-main {
+    padding: 16px !important;
+  }
+  .channel-header {
+    flex-direction: column !important;
+    gap: 12px !important;
+    align-items: center !important;
+    text-align: center !important;
+  }
+  .channel-avatar {
+    width: 72px !important;
+    height: 72px !important;
+    border-radius: 36px !important;
+  }
+  .channel-header-info {
+    text-align: center !important;
+  }
+  .channel-header-info h1 {
+    justify-content: center !important;
+  }
+  .channel-header-meta {
+    justify-content: center !important;
+  }
+
+  /* Channel editor — stack columns */
+  .editor-grid {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+  }
+
+  /* Video summary row — smaller thumb, actions wrap */
+  .video-row-header {
+    grid-template-columns: 100px 1fr !important;
+    gap: 10px !important;
+  }
+  .video-row-thumb {
+    width: 100px !important;
+    height: 56px !important;
+  }
+  .video-row-actions {
+    grid-column: 1 / -1 !important;
+    justify-content: flex-end !important;
+    flex-wrap: wrap !important;
+  }
+
+  /* Metrics page */
+  .metrics-main {
+    padding: 16px !important;
+  }
+  .metrics-grid-2 {
+    grid-template-columns: 1fr !important;
+    gap: 24px !important;
+  }
+
+  /* Follow-ups — stack title and reason */
+  .follow-up-row {
+    flex-direction: column !important;
+    gap: 2px !important;
+  }
+  .follow-up-reason {
+    max-width: none !important;
+  }
+}

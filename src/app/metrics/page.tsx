@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { getMetrics } from '@/lib/metrics';
 import { HeaderBar } from '../_components/HeaderBar';
 import { formatCount, formatRelative, youtubeVideoUrl } from '../_lib/format';
-import { isConnected } from '@/lib/tokens';
+import { isConnected, getUserProfile } from '@/lib/tokens';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,15 +12,16 @@ export const metadata = {
 };
 
 export default async function MetricsPage() {
-  const [connected, m] = await Promise.all([
+  const [connected, profile, m] = await Promise.all([
     isConnected(),
+    getUserProfile(),
     getMetrics(),
   ]);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} />
-      <main style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+      <HeaderBar connected={connected} profile={profile} />
+      <main className="metrics-main" style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 14 }}>
           <Link href="/" style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to subscriptions</Link>
         </div>
@@ -43,7 +44,7 @@ export default async function MetricsPage() {
               <StatCard label="Total interactions" value={m.summary.total_interactions} highlight />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32, alignItems: 'start' }}>
+            <div className="metrics-grid-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32, alignItems: 'start' }}>
               {/* Top channels */}
               <section>
                 <h2 style={sectionHeading}>Top channels</h2>

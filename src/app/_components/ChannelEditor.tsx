@@ -76,7 +76,7 @@ export function ChannelEditor({
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+    <div className="editor-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
       <Section title="Folders" dirty={!sameSet(selectedFolders, new Set(channel.folder_ids))} onSave={saveFolders} pending={pending}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {folders.length === 0 && <span style={{ color: '#5a5a64', fontSize: 13 }}>No folders yet. Create one from the sidebar.</span>}

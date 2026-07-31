@@ -12,7 +12,7 @@ import { newId } from './id';
 import { embed, embedQuery, cosineSim, EMBEDDING_MODEL } from './embeddings';
 import { fetchTranscript } from './transcript';
 import { setTranscript } from './video-repo';
-import type { TranscriptSegment, TranscriptChunk } from './types';
+import type { TranscriptSegment, TranscriptChunk, TranscriptSearchResult } from './types';
 
 /** Target chunk size in characters. ~400 chars ≈ 60-80 words ≈ 20-30s of speech. */
 const CHUNK_TARGET_CHARS = 400;
@@ -190,6 +190,64 @@ export async function search(videoId: string, query: string, k = 5): Promise<Sea
           start_ms: row.start_ms,
           end_ms: row.end_ms,
         },
+      };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, k);
+  } finally {
+    client.release();
+  }
+}
+
+// ----- cross-video search (TAV-10) ------------------------------------------
+
+/**
+ * Search across *all* indexed transcript chunks. Returns the top-k matches
+ * with joined video and channel metadata for display.
+ *
+ * Like `search()` but without the single-video filter. We fetch all chunks
+ * (with a video/channel join) and score in JS — fine for the current scale
+ * (hundreds to low-thousands of chunks across a subscription library).
+ */
+export async function searchAcross(query: string, k = 20): Promise<TranscriptSearchResult[]> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query(
+      `SELECT tc.text, tc.start_ms, tc.end_ms, tc.embedding,
+              v.video_id, v.title AS video_title, v.channel_id,
+              c.title AS channel_title
+       FROM transcript_chunks tc
+       JOIN videos v   ON v.video_id = tc.video_id
+       JOIN channels c  ON c.channel_id = v.channel_id
+       ORDER BY tc.video_id, tc.chunk_index`,
+    );
+
+    if (rows.length === 0) return [];
+
+    const queryVec = embedQuery(query);
+
+    const scored: TranscriptSearchResult[] = rows.map((row: {
+      text: string;
+      start_ms: number;
+      end_ms: number | null;
+      embedding: Buffer;
+      video_id: string;
+      video_title: string;
+      channel_id: string;
+      channel_title: string;
+    }) => {
+      const chunkVec = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+      const score = cosineSim(queryVec, chunkVec);
+      return {
+        videoId: row.video_id,
+        videoTitle: row.video_title,
+        channelId: row.channel_id,
+        channelTitle: row.channel_title,
+        chunkText: row.text,
+        startMs: row.start_ms,
+        endMs: row.end_ms,
+        score,
       };
     });
 

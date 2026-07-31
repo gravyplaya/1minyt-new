@@ -1,4 +1,5 @@
 import { getDb } from './db';
+import type { PoolClient } from 'pg';
 import { newId } from './id';
 import type {
   ChannelQuery,
@@ -7,6 +8,7 @@ import type {
   ChannelWithRelations,
   FolderRow,
   MusicFlag,
+  PaginatedChannels,
   TagRow,
 } from './types';
 
@@ -28,84 +30,137 @@ const DEFAULT_DIR: Record<ChannelSort, 'asc' | 'desc'> = {
   updated:     'desc',
 };
 
+/**
+ * Build the WHERE clause (and bound params) shared by the list and count queries.
+ * Returns the SQL fragment (empty string when no filters apply) and the param
+ * array — the count query reuses the same params.
+ */
+function buildChannelWhere(query: ChannelQuery): { whereSql: string; params: unknown[] } {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  let paramIdx = 1;
+
+  if (!query.includeMusic && !query.onlyMusic) {
+    where.push('(c.music_flag IS NULL OR c.music_flag != 1)');
+  }
+  if (query.onlyMusic) {
+    where.push('c.music_flag = 1');
+  }
+  if (!query.hidden) {
+    where.push('c.hidden = 0');
+  }
+  if (query.search?.trim()) {
+    where.push(`(c.title ILIKE $${paramIdx} OR c.handle ILIKE $${paramIdx} OR c.description ILIKE $${paramIdx})`);
+    params.push(`%${query.search.trim()}%`);
+    paramIdx++;
+  }
+
+  if (query.folderId === 'none') {
+    where.push('NOT EXISTS (SELECT 1 FROM channel_folders cf WHERE cf.channel_id = c.channel_id)');
+  } else if (query.folderId) {
+    where.push(`EXISTS (SELECT 1 FROM channel_folders cf WHERE cf.channel_id = c.channel_id AND cf.folder_id = $${paramIdx})`);
+    params.push(query.folderId);
+    paramIdx++;
+  }
+  if (query.tagId === 'none') {
+    where.push('NOT EXISTS (SELECT 1 FROM channel_tags ct WHERE ct.channel_id = c.channel_id)');
+  } else if (query.tagId) {
+    where.push(`EXISTS (SELECT 1 FROM channel_tags ct WHERE ct.channel_id = c.channel_id AND ct.tag_id = $${paramIdx})`);
+    params.push(query.tagId);
+    paramIdx++;
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  return { whereSql, params };
+}
+
+/** Hydrate folder_ids and tag_ids for a batch of channel rows in two bulk queries. */
+async function hydrateRelations(
+  client: PoolClient,
+  rows: ChannelRow[],
+): Promise<ChannelWithRelations[]> {
+  if (rows.length === 0) return [];
+
+  const ids = rows.map(r => r.channel_id);
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+
+  const folderResult = await client.query(
+    `SELECT channel_id, folder_id FROM channel_folders WHERE channel_id IN (${placeholders})`,
+    ids,
+  );
+  const tagResult = await client.query(
+    `SELECT channel_id, tag_id FROM channel_tags WHERE channel_id IN (${placeholders})`,
+    ids,
+  );
+
+  const folderMap = new Map<string, string[]>();
+  for (const f of folderResult.rows as { channel_id: string; folder_id: string }[]) {
+    const list = folderMap.get(f.channel_id) ?? [];
+    list.push(f.folder_id);
+    folderMap.set(f.channel_id, list);
+  }
+  const tagMap = new Map<string, string[]>();
+  for (const t of tagResult.rows as { channel_id: string; tag_id: string }[]) {
+    const list = tagMap.get(t.channel_id) ?? [];
+    list.push(t.tag_id);
+    tagMap.set(t.channel_id, list);
+  }
+
+  return rows.map(row => ({
+    ...row,
+    folder_ids: folderMap.get(row.channel_id) ?? [],
+    tag_ids:    tagMap.get(row.channel_id) ?? [],
+  }));
+}
+
 export async function listChannels(query: ChannelQuery = {}): Promise<ChannelWithRelations[]> {
   const client = await getDb();
   try {
-    const where: string[] = [];
-    const params: unknown[] = [];
-    let paramIdx = 1;
-
-    if (!query.includeMusic && !query.onlyMusic) {
-      where.push('(c.music_flag IS NULL OR c.music_flag != 1)');
-    }
-    if (query.onlyMusic) {
-      where.push('c.music_flag = 1');
-    }
-    if (!query.hidden) {
-      where.push('c.hidden = 0');
-    }
-    if (query.search?.trim()) {
-      where.push(`(c.title ILIKE $${paramIdx} OR c.handle ILIKE $${paramIdx} OR c.description ILIKE $${paramIdx})`);
-      params.push(`%${query.search.trim()}%`);
-      paramIdx++;
-    }
-
-    if (query.folderId === 'none') {
-      where.push('NOT EXISTS (SELECT 1 FROM channel_folders cf WHERE cf.channel_id = c.channel_id)');
-    } else if (query.folderId) {
-      where.push(`EXISTS (SELECT 1 FROM channel_folders cf WHERE cf.channel_id = c.channel_id AND cf.folder_id = $${paramIdx})`);
-      params.push(query.folderId);
-      paramIdx++;
-    }
-    if (query.tagId === 'none') {
-      where.push('NOT EXISTS (SELECT 1 FROM channel_tags ct WHERE ct.channel_id = c.channel_id)');
-    } else if (query.tagId) {
-      where.push(`EXISTS (SELECT 1 FROM channel_tags ct WHERE ct.channel_id = c.channel_id AND ct.tag_id = $${paramIdx})`);
-      params.push(query.tagId);
-      paramIdx++;
-    }
+    const { whereSql, params } = buildChannelWhere(query);
 
     const sort: ChannelSort = query.sort ?? 'alpha';
     const dir: 'asc' | 'desc' = query.dir ?? DEFAULT_DIR[sort];
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const orderSql = `ORDER BY ${SORT_SQL[sort]} ${dir.toUpperCase()}`;
 
-    const sql = `SELECT c.* FROM channels c ${whereSql} ${orderSql}`;
+    const limitSql = query.limit != null ? `LIMIT ${Number(query.limit)}` : '';
+    const offsetSql = query.offset != null ? `OFFSET ${Number(query.offset)}` : '';
+
+    const sql = `SELECT c.* FROM channels c ${whereSql} ${orderSql} ${limitSql} ${offsetSql}`.trim();
     const { rows } = await client.query<ChannelRow>(sql, params);
 
-    if (rows.length === 0) return [];
+    return hydrateRelations(client, rows);
+  } finally {
+    client.release();
+  }
+}
 
-    // Hydrate folder_ids and tag_ids in one batch each.
-    const ids = rows.map(r => r.channel_id);
-    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+/**
+ * Paginated channel query: returns the page of channels plus the total matching
+ * count (ignoring limit/offset) so the UI can render pagination controls.
+ */
+export async function listChannelsPage(query: ChannelQuery = {}): Promise<PaginatedChannels> {
+  const client = await getDb();
+  try {
+    const { whereSql, params } = buildChannelWhere(query);
 
-    const folderResult = await client.query(
-      `SELECT channel_id, folder_id FROM channel_folders WHERE channel_id IN (${placeholders})`,
-      ids,
-    );
-    const tagResult = await client.query(
-      `SELECT channel_id, tag_id FROM channel_tags WHERE channel_id IN (${placeholders})`,
-      ids,
-    );
+    // Total count (no LIMIT/OFFSET) — same params, same WHERE.
+    const countSql = `SELECT COUNT(*) as n FROM channels c ${whereSql}`.trim();
+    const countResult = await client.query(countSql, params);
+    const total = Number(countResult.rows[0].n);
 
-    const folderMap = new Map<string, string[]>();
-    for (const f of folderResult.rows as { channel_id: string; folder_id: string }[]) {
-      const list = folderMap.get(f.channel_id) ?? [];
-      list.push(f.folder_id);
-      folderMap.set(f.channel_id, list);
-    }
-    const tagMap = new Map<string, string[]>();
-    for (const t of tagResult.rows as { channel_id: string; tag_id: string }[]) {
-      const list = tagMap.get(t.channel_id) ?? [];
-      list.push(t.tag_id);
-      tagMap.set(t.channel_id, list);
-    }
+    if (total === 0) return { channels: [], total: 0 };
 
-    return rows.map(row => ({
-      ...row,
-      folder_ids: folderMap.get(row.channel_id) ?? [],
-      tag_ids:    tagMap.get(row.channel_id) ?? [],
-    }));
+    const sort: ChannelSort = query.sort ?? 'alpha';
+    const dir: 'asc' | 'desc' = query.dir ?? DEFAULT_DIR[sort];
+    const orderSql = `ORDER BY ${SORT_SQL[sort]} ${dir.toUpperCase()}`;
+    const limitSql = query.limit != null ? `LIMIT ${Number(query.limit)}` : '';
+    const offsetSql = query.offset != null ? `OFFSET ${Number(query.offset)}` : '';
+
+    const sql = `SELECT c.* FROM channels c ${whereSql} ${orderSql} ${limitSql} ${offsetSql}`.trim();
+    const { rows } = await client.query<ChannelRow>(sql, params);
+
+    const channels = await hydrateRelations(client, rows);
+    return { channels, total };
   } finally {
     client.release();
   }

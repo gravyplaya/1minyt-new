@@ -181,4 +181,14 @@ export async function fetchChannels(accessToken: string, channelIds: string[]): 
   return out;
 }
 
+export async function fetchMyChannel(accessToken: string): Promise<{ displayName: string | null; avatarUrl: string | null }> {
+  const yt = youtubeClientWithToken(accessToken);
+  const res = await yt.channels.list({ part: ['snippet'], mine: true, maxResults: 1 });
+  const ch = res.data.items?.[0];
+  return {
+    displayName: ch?.snippet?.title ?? null,
+    avatarUrl: ch?.snippet?.thumbnails?.default?.url ?? ch?.snippet?.thumbnails?.medium?.url ?? null,
+  };
+}
+
 export { TOKEN_URL };
