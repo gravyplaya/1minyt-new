@@ -2,9 +2,11 @@
  * Transcript fetcher for TAV-4 (1-Click Instant Summaries).
  *
  * Strategy:
- *   1. Try YouTube's timedtext API directly (zero quota, no download) — the same
- *      endpoint the web player uses. We fetch the auto-generated English caption
- *      track when one exists.
+ *   1. Try YouTube's Innertube player API (ANDROID client) to resolve caption
+ *      track URLs, then fetch the timedtext XML. The ANDROID client returns
+ *      URLs with valid signatures that work from any IP — unlike the web
+ *      client's embedded player response, which now hardcodes ip=0.0.0.0
+ *      and returns 0-byte responses.
  *   2. Fall back to `yt-dlp --write-auto-sub` which writes a VTT file we parse.
  *
  * The transcript infrastructure here is reused by Chat-with-Video (TAV-3), so
@@ -25,7 +27,7 @@ export interface TranscriptResult {
   source: 'timedtext' | 'yt-dlp';
   /** Approx char count of the cleaned text — handy for truncation decisions. */
   length: number;
-  /** Timestamped segments. Populated for json3 (timedtext) and VTT (yt-dlp). */
+  /** Timestamped segments. Populated for XML (timedtext) and VTT (yt-dlp). */
   segments?: TranscriptSegment[];
 }
 
@@ -34,8 +36,8 @@ export interface TranscriptResult {
  * available (the video may be music-only, have no speech, or be region-blocked).
  */
 export async function fetchTranscript(videoId: string): Promise<TranscriptResult | null> {
-  // 1. Fast path: direct timedtext. Cheap and usually sufficient for English content.
-  const direct = await fetchViaTimedText(videoId).catch(() => null);
+  // 1. Fast path: Innertube player API → timedtext XML.
+  const direct = await fetchViaInnertube(videoId).catch(() => null);
   if (direct && direct.text.trim().length > 40) {
     return {
       text: direct.text,
@@ -59,30 +61,83 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptResult
   return null;
 }
 
-// ----- timedtext ------------------------------------------------------------
+// ----- Innertube player API ---------------------------------------------------
 
 /**
- * Hit YouTube's internal timedtext endpoint. We resolve the caption track list
- * first, pick the first English track (manual or auto), then fetch its XML.
- *
- * This is the same mechanism the embedded player uses; it does not consume
- * YouTube Data API quota. It can break if YouTube changes the endpoint shape,
- * which is why we keep the yt-dlp fallback.
+ * Well-known YouTube Innertube API key for the web client. This is the same
+ * key embedded in every YouTube watch page; it is not a secret.
  */
-async function fetchViaTimedText(videoId: string): Promise<ParsedTranscript | null> {
-  // The most reliable entry point is the watch page's ytInitialPlayerResponse.
-  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const html = await fetch(watchUrl, {
+const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const INNERTUBE_PLAYER_URL = `https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_API_KEY}`;
+
+/**
+ * The ANDROID client is used because it returns caption track URLs with valid
+ * IP-agnostic signatures. The web client's embedded player response now
+ * hardcodes ip=0.0.0.0 in the baseUrl, causing YouTube to return 0-byte
+ * responses for every video.
+ */
+const ANDROID_USER_AGENT = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+
+interface InnertubeCaptionTrack {
+  baseUrl: string;
+  languageCode: string;
+  kind?: string; // "asr" = auto-generated
+}
+
+interface ParsedTranscript {
+  text: string;
+  segments: TranscriptSegment[];
+}
+
+/**
+ * Call the Innertube player API with the ANDROID client to resolve caption
+ * tracks, then fetch and parse the timedtext XML for the best English track.
+ *
+ * This does not consume YouTube Data API quota. The ANDROID client is less
+ * restrictive than the web client and returns working caption URLs.
+ */
+async function fetchViaInnertube(videoId: string): Promise<ParsedTranscript | null> {
+  const payload = {
+    context: {
+      client: {
+        clientName: 'ANDROID',
+        clientVersion: '20.10.38',
+        androidSdkVersion: 30,
+        osName: 'Android',
+        osVersion: '11',
+        platform: 'MOBILE',
+      },
+    },
+    videoId,
+  };
+
+  const resp = await fetch(INNERTUBE_PLAYER_URL, {
+    method: 'POST',
     headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+      'Content-Type': 'application/json',
+      'User-Agent': ANDROID_USER_AGENT,
       'Accept-Language': 'en-US,en;q=0.9',
     },
-  }).then(r => r.text());
+    body: JSON.stringify(payload),
+  });
 
-  // Extract captionTracks from the embedded player response.
-  const tracks = extractCaptionTracks(html);
-  if (tracks.length === 0) return null;
+  if (!resp.ok) return null;
+
+  const data = (await resp.json()) as {
+    playabilityStatus?: { status?: string; reason?: string };
+    captions?: {
+      playerCaptionsTracklistRenderer?: {
+        captionTracks?: InnertubeCaptionTrack[];
+      };
+    };
+  };
+
+  // Video may be unplayable (private, deleted, region-blocked, age-restricted).
+  const status = data.playabilityStatus?.status;
+  if (status !== 'OK') return null;
+
+  const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!tracks || tracks.length === 0) return null;
 
   // Prefer a manual English track, then auto English, then anything English-ish.
   const pick =
@@ -91,75 +146,86 @@ async function fetchViaTimedText(videoId: string): Promise<ParsedTranscript | nu
     tracks[0];
   if (!pick?.baseUrl) return null;
 
-  const xml = await fetch(pick.baseUrl + '&fmt=json3').then(r => r.text());
-  return parseJson3(xml);
+  // The ANDROID client returns format=3 XML regardless of &fmt=, so we parse
+  // XML rather than json3.
+  const xml = await fetch(pick.baseUrl, {
+    headers: { 'User-Agent': ANDROID_USER_AGENT },
+  }).then(r => r.text());
+
+  return parseTimedTextXml(xml);
 }
 
-interface CaptionTrack {
-  baseUrl: string;
-  languageCode: string;
-  kind?: string; // "asr" = auto-generated
-}
-
-function extractCaptionTracks(html: string): CaptionTrack[] {
-  // The player response nests captionTracks as a JSON array inside the page.
-  const marker = '"captionTracks":';
-  const idx = html.indexOf(marker);
-  if (idx === -1) return [];
-  // Find the array bounds.
-  const start = html.indexOf('[', idx);
-  if (start === -1) return [];
-  let depth = 0;
-  let end = start;
-  for (let i = start; i < html.length; i++) {
-    const ch = html[i];
-    if (ch === '[') depth++;
-    else if (ch === ']') {
-      depth--;
-      if (depth === 0) { end = i + 1; break; }
-    }
-  }
-  try {
-    const arr = JSON.parse(html.slice(start, end)) as CaptionTrack[];
-    return arr.filter(t => t.baseUrl);
-  } catch {
-    return [];
-  }
-}
-
-/** json3 format: { events: [{ segs: [{ utf8: "word" }] }] } */
-interface Json3Event {
-  tStartMs?: number;
-  dDurationMs?: number;
-  segs?: Array<{ utf8?: string }>;
-}
-
-interface ParsedTranscript {
-  text: string;
-  segments: TranscriptSegment[];
-}
-
-function parseJson3(json: string): ParsedTranscript {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return { text: '', segments: [] };
-  }
-  const events = (parsed as { events?: Json3Event[] }).events ?? [];
+/**
+ * Parse YouTube's timedtext format=3 XML.
+ *
+ * Two variants exist:
+ *   - Manual captions: <p t="1360" d="1680">text here</p>
+ *     Text is a direct child of <p>.
+ *   - Auto-generated captions: <p t="0" d="4240"><s>Are</s><s t="200"> you</s></p>
+ *     Words are in <s> children of <p>.
+ *
+ * We extract <p> elements with regex, then for each one check whether it
+ * contains <s> children (auto-generated) or has direct text (manual). This
+ * avoids needing a DOM library — YouTube's timedtext XML is well-structured
+ * and doesn't nest <p> tags.
+ */
+function parseTimedTextXml(xml: string): ParsedTranscript {
   const segments: TranscriptSegment[] = [];
   const lines: string[] = [];
   let segIndex = 0;
-  for (const ev of events) {
-    const segs = ev.segs ?? [];
-    const line = segs.map(s => s.utf8 ?? '').join('').trim();
+
+  // Match all <p ...>...</p> elements. The format is predictable enough that
+  // a greedy match up to </p> works — <p> tags are never nested in timedtext.
+  const pRegex = /<p\s+([^>]*)>([\s\S]*?)<\/p>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pRegex.exec(xml)) !== null) {
+    const attrs = match[1];
+    const inner = match[2];
+
+    // Extract t (start ms) and d (duration ms) from attributes.
+    const tMatch = attrs.match(/\bt="(\d+)"/);
+    const dMatch = attrs.match(/\bd="(\d+)"/);
+    const startMs = tMatch ? parseInt(tMatch[1], 10) : 0;
+    const endMs = dMatch ? startMs + parseInt(dMatch[1], 10) : null;
+
+    // Collect text from <s> children (auto-generated), or use direct text (manual).
+    const sMatches = inner.match(/<s(?:\s[^>]*)?>([^<]*)<\/s>/g);
+    let line: string;
+    if (sMatches && sMatches.length > 0) {
+      // Extract text content from each <s> tag.
+      const words = sMatches.map(s => {
+        const m = s.match(/<s(?:\s[^>]*)?>([^<]*)<\/s>/);
+        return m ? m[1] : '';
+      });
+      line = words.join(' ');
+    } else {
+      // Manual caption: text is direct child of <p>, strip any inline tags.
+      line = inner.replace(/<[^>]+>/g, '');
+    }
+
+    // Decode XML entities, collapse whitespace.
+    line = decodeXmlEntities(line)
+      .replace(/\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!line) continue;
-    const startMs = ev.tStartMs ?? 0;
-    const endMs = ev.dDurationMs != null ? startMs + ev.dDurationMs : null;
+
     segments.push({ text: line, start_ms: startMs, end_ms: endMs, seg_index: segIndex++ });
     lines.push(line);
   }
+
   return { text: clean(lines.join(' ')), segments };
+}
+
+/** Decode the handful of XML entities YouTube uses in timedtext. */
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
 }
 
 // ----- yt-dlp fallback -------------------------------------------------------

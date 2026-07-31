@@ -23,7 +23,7 @@ import { fetchTranscript } from '@/lib/transcript';
 import { summarizeVideo } from '@/lib/summarize';
 import { indexVideo, isIndexed, chunkCount } from '@/lib/vector-store';
 import { chatWithVideo } from '@/lib/chat';
-import type { ChatCitation, ChatMessage, VideoWithSummary } from '@/lib/types';
+import type { ChatCitation, ChatMessage, SummaryRow, VideoWithSummary } from '@/lib/types';
 
 export async function triggerSyncAction() {
   const result = await syncSubscriptions();
@@ -146,6 +146,7 @@ export async function fetchTranscriptAction(videoId: string): Promise<Transcript
 export interface SummarizeOutcome {
   ok: boolean;
   videoId: string;
+  summary?: SummaryRow;
   error?: string;
 }
 
@@ -171,7 +172,7 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
       recentUploads: uploads,
     });
 
-    await saveSummary({
+    const saved = await saveSummary({
       video_id: videoId,
       model: summary.model,
       tldr: summary.tldr,
@@ -181,7 +182,9 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
       token_count: summary.tokenCount,
     });
 
-    return { ok: true, videoId };
+    revalidatePath(`/c/${video.channel_id}`);
+
+    return { ok: true, videoId, summary: saved };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, videoId, error: msg };

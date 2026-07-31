@@ -59,6 +59,8 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
       const sOutcome = await summarizeVideoAction(video.video_id);
       if (sOutcome.ok) {
         setStage('done');
+        // Update local summary immediately so the UI shows it without a page refresh.
+        if (sOutcome.summary) setSummary(sOutcome.summary);
         // Refresh server data so the row reflects the persisted summary.
         router.refresh();
       } else {
