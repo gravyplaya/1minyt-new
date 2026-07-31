@@ -63,11 +63,27 @@ export interface ChannelQuery {
   hidden?: boolean;                // default false — hide soft-hidden
   sort?: ChannelSort;              // default 'alpha'
   dir?: 'asc' | 'desc';            // default 'asc' for alpha, 'desc' for others
+  limit?: number;                  // page size for pagination
+  offset?: number;                 // row offset for pagination
+}
+
+/** Paginated channel result with total count for UI controls. */
+export interface PaginatedChannels {
+  channels: ChannelWithRelations[];
+  total: number;
 }
 
 // ----- TAV-4: videos + summaries ---------------------------------------------
 
 export type TranscriptStatus = 'pending' | 'fetched' | 'unavailable' | 'error';
+
+// ----- TAV-13: Chapter detection ---------------------------------------------
+
+/** An AI-detected chapter boundary in a video transcript. */
+export interface Chapter {
+  title: string;
+  startMs: number;
+}
 
 export interface VideoRow {
   video_id: string;
@@ -97,14 +113,20 @@ export interface SummaryRow {
   tldr: string;
   key_points: string[];          // parsed from JSON
   follow_ups: FollowUp[];          // parsed from JSON
+  /** 2–5 topic tags; empty array for summaries written before TAV-8. */
+  topics: string[];             // parsed from JSON
   prompt: string;
   token_count: number | null;
   created_at: number;
+  /** TAV-12: 1 if the user bookmarked this summary, 0 otherwise. */
+  bookmarked: 0 | 1;
 }
 
 /** What the summary client component receives (video joined with its latest summary). */
 export interface VideoWithSummary extends VideoRow {
   summary: SummaryRow | null;
+  /** TAV-13: AI-detected chapters, or null when not yet detected. */
+  chapters: Chapter[] | null;
 }
 
 // ----- TAV-5: Chat with Video (RAG over transcripts) -------------------------
@@ -150,4 +172,18 @@ export interface ChatAnswerResult {
   model: string;
   /** Whether the transcript has been indexed for RAG yet. */
   indexed: boolean;
+}
+
+// ----- TAV-10: Cross-video transcript search --------------------------------
+
+/** A single transcript segment match across all indexed videos. */
+export interface TranscriptSearchResult {
+  videoId: string;
+  videoTitle: string;
+  channelId: string;
+  channelTitle: string;
+  chunkText: string;
+  startMs: number;
+  endMs: number | null;
+  score: number;
 }

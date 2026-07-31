@@ -37,6 +37,11 @@ export function youtubeVideoUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
+/** YouTube watch URL jumping to a specific timestamp (seconds). */
+export function youtubeVideoUrlAt(videoId: string, startSeconds: number): string {
+  return `https://www.youtube.com/watch?v=${videoId}&t=${startSeconds}s`;
+}
+
 /** Parse an ISO-8601 duration like "PT1H2M3S" into seconds. Returns null on failure. */
 export function parseIso8601Duration(iso: string | null | undefined): number | null {
   if (!iso) return null;

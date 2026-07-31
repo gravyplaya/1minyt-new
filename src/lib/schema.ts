@@ -86,7 +86,6 @@ export const SCHEMA_STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_sync_runs_started ON sync_runs(started_at DESC)`,
-
   `CREATE TABLE IF NOT EXISTS oauth_tokens (
     user_id       TEXT PRIMARY KEY,
     access_token  TEXT NOT NULL,
@@ -94,6 +93,10 @@ export const SCHEMA_STATEMENTS: string[] = [
     expiry_date   INTEGER,
     updated_at    INTEGER NOT NULL
   )`,
+
+  // User profile columns — fetched once at connect via channels.list(mine=true).
+  `ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS display_name TEXT`,
+  `ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS avatar_url   TEXT`,
 
   // ----- TAV-4: videos + summaries -------------------------------------
 
@@ -129,6 +132,16 @@ export const SCHEMA_STATEMENTS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_summaries_video ON summaries(video_id, created_at DESC)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_video_model ON summaries(video_id, model)`,
+
+  // TAV-8: auto-topic tagging — add a topics column to existing summaries.
+  // Stores a JSON array string, e.g. '["ai","economics"]'. Nullable so old
+  // rows (and rows written before this migration) keep working.
+  `ALTER TABLE summaries ADD COLUMN IF NOT EXISTS topics TEXT`,
+
+  // TAV-12: bookmark flag on summaries. 0 = not bookmarked, 1 = bookmarked.
+  // Nullable so the migration is additive; treated as 0 (not bookmarked) when null.
+  `ALTER TABLE summaries ADD COLUMN IF NOT EXISTS bookmarked INTEGER NOT NULL DEFAULT 0`,
+  `CREATE INDEX IF NOT EXISTS idx_summaries_bookmarked ON summaries(bookmarked, created_at DESC)`,
 
   // ----- TAV-5: chat with video ----------------------------------------
 
@@ -166,6 +179,20 @@ export const SCHEMA_STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_chat_video ON chat_messages(video_id, created_at)`,
+
+  // ----- TAV-13: AI chapter detection ---------------------------------
+
+  // One row per video holding the AI-detected chapters (JSON array of
+  // {title, startMs}). Re-detected chapters upsert by video_id.
+  `CREATE TABLE IF NOT EXISTS video_chapters (
+    video_id    TEXT PRIMARY KEY REFERENCES videos(video_id) ON DELETE CASCADE,
+    chapters     TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    token_count  INTEGER,
+    created_at   INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_video_chapters_created ON video_chapters(created_at DESC)`,
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

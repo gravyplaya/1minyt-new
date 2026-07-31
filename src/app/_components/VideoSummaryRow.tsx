@@ -2,9 +2,10 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type { VideoWithSummary } from '@/lib/types';
-import { fetchTranscriptAction, summarizeVideoAction } from '@/app/actions';
-import { formatRelative, youtubeVideoUrl } from '../_lib/format';
+import type { Chapter, VideoWithSummary } from '@/lib/types';
+import { fetchTranscriptAction, summarizeVideoAction, toggleBookmarkAction } from '@/app/actions';
+import { formatMmSs } from '@/lib/chapters';
+import { formatRelative, youtubeVideoUrl, youtubeVideoUrlAt } from '../_lib/format';
 import { VideoChatPanel } from './VideoChatPanel';
 
 type Stage = 'idle' | 'transcribing' | 'summarizing' | 'done' | 'error';
@@ -32,10 +33,16 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
   const [error, setError] = useState<string | null>(null);
   // Local copy so we can show the freshly-saved summary before router.refresh.
   const [summary, setSummary] = useState(video.summary);
+  // TAV-13: local copy of chapters so freshly-detected chapters show before router.refresh.
+  const [chapters, setChapters] = useState<Chapter[] | null>(video.chapters);
   const [stage, setStage] = useState<Stage>('idle');
   const [transcriptText, setTranscriptText] = useState<string | null>(null);
   const [transcriptSource, setTranscriptSource] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  // TAV-12: bookmark state. Local copy for optimistic updates; the server is
+  // the source of truth and router.refresh() reconciles after the toggle.
+  const [bookmarked, setBookmarked] = useState<boolean>(summary?.bookmarked === 1);
+  const [bookmarkPending, startBookmark] = useTransition();
 
   const summarize = () => {
     setError(null);
@@ -61,6 +68,8 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
         setStage('done');
         // Update local summary immediately so the UI shows it without a page refresh.
         if (sOutcome.summary) setSummary(sOutcome.summary);
+        // TAV-13: update chapters immediately if detection produced them.
+        if (sOutcome.chapters) setChapters(sOutcome.chapters);
         // Refresh server data so the row reflects the persisted summary.
         router.refresh();
       } else {
@@ -74,9 +83,24 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
   const showSummary = hasSummary && expanded;
   const isWorking = stage === 'transcribing' || stage === 'summarizing';
 
+  const toggleBookmark = () => {
+    if (!summary) return; // nothing to bookmark yet
+    const next = !bookmarked;
+    setBookmarked(next); // optimistic
+    startBookmark(async () => {
+      const outcome = await toggleBookmarkAction(video.video_id);
+      if (outcome.ok && outcome.bookmarked != null) {
+        setBookmarked(outcome.bookmarked === 1);
+      } else if (!outcome.ok) {
+        setBookmarked(!next); // revert on failure
+      }
+      router.refresh();
+    });
+  };
+
   return (
     <div style={{ border: '1px solid #2a2a33', borderRadius: 12, background: '#15151a', overflow: 'hidden' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: 12, padding: 12, alignItems: 'center' }}>
+      <div className="video-row-header" style={{ display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: 12, padding: 12, alignItems: 'center' }}>
         <Thumb video={video} />
         <div style={{ minWidth: 0 }}>
           <a
@@ -87,7 +111,7 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
           >
             {video.title}
           </a>
-          <div style={{ color: '#8b8b94', fontSize: 12, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ color: '#8b8b94', fontSize: 12, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             {video.duration_seconds != null && <span>{formatDuration(video.duration_seconds)}</span>}
             {video.published_at && <span>{formatRelative(video.published_at)}</span>}
             {video.transcript_status === 'unavailable' && (
@@ -96,9 +120,29 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
             {summary && (
               <span style={{ color: '#5cd9a3' }}>summarized · {formatRelative(summary.created_at)}</span>
             )}
+            {summary && summary.topics.length > 0 && (
+              <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+                {summary.topics.map(t => (
+                  <span
+                    key={t}
+                    style={{
+                      fontSize: 11,
+                      padding: '1px 7px',
+                      borderRadius: 999,
+                      background: 'rgba(91,158,255,0.12)',
+                      color: '#7db5ff',
+                      border: '1px solid rgba(91,158,255,0.25)',
+                      textTransform: 'lowercase',
+                    }}
+                  >
+                    {t}
+                  </span>
+                ))}
+              </span>
+            )}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="video-row-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {hasSummary && !isWorking && (
             <button
               type="button"
@@ -119,6 +163,26 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
               style={{ fontSize: 12, padding: '6px 10px' }}
             >
               {chatOpen ? 'Close chat' : '💬 Chat'}
+            </button>
+          )}
+          {hasSummary && !isWorking && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={toggleBookmark}
+              disabled={bookmarkPending}
+              title={bookmarked ? 'Remove bookmark' : 'Bookmark this summary'}
+              aria-pressed={bookmarked}
+              style={{
+                fontSize: 16,
+                padding: '4px 8px',
+                lineHeight: 1,
+                color: bookmarked ? '#f5c542' : '#8b8b94',
+                background: bookmarked ? 'rgba(245,197,66,0.12)' : undefined,
+                border: bookmarked ? '1px solid rgba(245,197,66,0.3)' : undefined,
+              }}
+            >
+              {bookmarked ? '★' : '☆'}
             </button>
           )}
           <button
@@ -182,7 +246,7 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
 
           {/* Stage 2: summary body */}
           {showSummary && summary && stage !== 'summarizing' && (
-            <SummaryBody summary={summary} channelId={channelId} />
+            <SummaryBody summary={summary} videoId={video.video_id} chapters={chapters} />
           )}
         </div>
       )}
@@ -199,10 +263,12 @@ export function VideoSummaryRow({ video, channelId }: { video: VideoWithSummary;
 
 function SummaryBody({
   summary,
-  channelId,
+  videoId,
+  chapters,
 }: {
   summary: NonNullable<VideoWithSummary['summary']>;
-  channelId: string;
+  videoId: string;
+  chapters: Chapter[] | null;
 }) {
   return (
     <div>
@@ -225,7 +291,7 @@ function SummaryBody({
           <div style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 11, color: '#8b8b94', marginBottom: 6 }}>Recommended follow-ups</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {summary.follow_ups.map(f => (
-              <div key={f.video_id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <div key={f.video_id} className="follow-up-row" style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
                 <a
                   href={youtubeVideoUrl(f.video_id)}
                   target="_blank"
@@ -234,16 +300,70 @@ function SummaryBody({
                 >
                   {f.title}
                 </a>
-                <span style={{ color: '#8b8b94', fontSize: 12, fontStyle: 'italic', maxWidth: 360 }}>{f.reason}</span>
+                <span className="follow-up-reason" style={{ color: '#8b8b94', fontSize: 12, fontStyle: 'italic', maxWidth: 360 }}>{f.reason}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
+      {/* TAV-13: AI-generated chapter list. Rendered between the summary and the
+          chat area. Each chapter links to YouTube at the chapter's timestamp. */}
+      {chapters && chapters.length > 0 && (
+        <ChapterList chapters={chapters} videoId={videoId} />
+      )}
+
       <div style={{ marginTop: 10, color: '#5a5a64', fontSize: 11 }}>
         model: <code>{summary.model}</code>
         {summary.token_count != null && <> · {summary.token_count} tokens</>}
+      </div>
+    </div>
+  );
+}
+
+/** TAV-13: Clickable chapter list. Each entry opens YouTube at that timestamp. */
+function ChapterList({ chapters, videoId }: { chapters: Chapter[]; videoId: string }) {
+  return (
+    <div style={{ marginTop: 12, marginBottom: 4 }}>
+      <div style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 11, color: '#8b8b94', marginBottom: 6 }}>
+        Chapters
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {chapters.map((ch, i) => (
+          <a
+            key={i}
+            href={youtubeVideoUrlAt(videoId, Math.floor(ch.startMs / 1000))}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'flex',
+              gap: 10,
+              alignItems: 'baseline',
+              padding: '5px 8px',
+              borderRadius: 6,
+              textDecoration: 'none',
+              color: '#c2c2cb',
+              fontSize: 13,
+              lineHeight: 1.4,
+              background: 'transparent',
+              border: '1px solid transparent',
+              transition: 'background .12s ease, border-color .12s ease',
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLAnchorElement).style.background = 'rgba(91,158,255,0.08)';
+              (e.currentTarget as HTMLAnchorElement).style.borderColor = 'rgba(91,158,255,0.2)';
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLAnchorElement).style.background = 'transparent';
+              (e.currentTarget as HTMLAnchorElement).style.borderColor = 'transparent';
+            }}
+          >
+            <span style={{ color: '#7db5ff', fontSize: 12, fontFamily: 'monospace', minWidth: 52, flexShrink: 0 }}>
+              {formatMmSs(ch.startMs)}
+            </span>
+            <span style={{ minWidth: 0 }}>{ch.title}</span>
+          </a>
+        ))}
       </div>
     </div>
   );
@@ -258,12 +378,13 @@ function Thumb({ video }: { video: VideoWithSummary }) {
       <img
         src={video.thumbnail_url}
         alt={video.title}
+        className="video-row-thumb"
         style={{ width: 120, height: 68, objectFit: 'cover', borderRadius: 8, background: '#1f1f26' }}
       />
     );
   }
   return (
-    <div style={{ width: 120, height: 68, borderRadius: 8, background: '#1f1f26', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5a5a64', fontSize: 12 }}>
+    <div className="video-row-thumb" style={{ width: 120, height: 68, borderRadius: 8, background: '#1f1f26', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5a5a64', fontSize: 12 }}>
       no thumb
     </div>
   );
