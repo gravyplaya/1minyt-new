@@ -193,7 +193,10 @@ export async function upsertChannel(input: ChannelRow): Promise<{ created: boole
           thumbnail_url=$5, subscriber_count=$6, video_count=$7,
           country=$8, custom_url=$9,
           music_flag=$10, music_score=$11,
-          subscribed_at=$12, synced_at=$13, updated_at=$14
+          subscribed_at=$12, synced_at=$13, updated_at=$14,
+          topic_categories=$15,
+          banner_image_url=$16,
+          branding_keywords=$17
         WHERE channel_id=$1`,
         [
           input.channel_id, input.title, input.handle, input.description,
@@ -201,6 +204,9 @@ export async function upsertChannel(input: ChannelRow): Promise<{ created: boole
           input.country, input.custom_url,
           input.music_flag, input.music_score,
           input.subscribed_at, input.synced_at, input.updated_at,
+          input.topic_categories,
+          input.banner_image_url,
+          input.branding_keywords,
         ],
       );
       return { created: false };
@@ -210,12 +216,14 @@ export async function upsertChannel(input: ChannelRow): Promise<{ created: boole
         channel_id, title, handle, description, thumbnail_url,
         subscriber_count, video_count, country, custom_url,
         music_flag, music_score, hidden, notes,
-        subscribed_at, synced_at, created_at, updated_at
+        subscribed_at, synced_at, created_at, updated_at,
+        topic_categories, banner_image_url, branding_keywords
       ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9,
         $10, $11, 0, NULL,
-        $12, $13, $14, $15
+        $12, $13, $14, $15,
+        $16, $17, $18
       )`,
       [
         input.channel_id, input.title, input.handle, input.description,
@@ -223,6 +231,9 @@ export async function upsertChannel(input: ChannelRow): Promise<{ created: boole
         input.country, input.custom_url,
         input.music_flag, input.music_score,
         input.subscribed_at, input.synced_at, input.created_at, input.updated_at,
+        input.topic_categories,
+        input.banner_image_url,
+        input.branding_keywords,
       ],
     );
     return { created: true };

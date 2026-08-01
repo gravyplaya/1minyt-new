@@ -10,8 +10,10 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "sync": "tsx scripts/sync-subscriptions.ts",
+    "sync:videos": "tsx scripts/sync-videos.ts",
     "smoke": "tsx scripts/smoke-test.ts",
-    "smoke:chat": "tsx scripts/smoke-chat.ts"
+    "smoke:chat": "tsx scripts/smoke-chat.ts",
+    "test:rss": "tsx scripts/test-rss-parser.ts"
   },
   "dependencies": {
     "google-auth-library": "^9.15.0",

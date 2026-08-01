@@ -209,10 +209,24 @@ export async function search(videoId: string, query: string, k = 5): Promise<Sea
  * Like `search()` but without the single-video filter. We fetch all chunks
  * (with a video/channel join) and score in JS — fine for the current scale
  * (hundreds to low-thousands of chunks across a subscription library).
+ *
+ * Pass `channelId` to restrict scoring to a single channel's chunks. That
+ * pushes the filter into SQL so cosine scoring only runs over that channel's
+ * rows, instead of loading every channel's chunks and filtering in JS.
  */
-export async function searchAcross(query: string, k = 20): Promise<TranscriptSearchResult[]> {
+export async function searchAcross(
+  query: string,
+  k = 20,
+  channelId?: string,
+): Promise<TranscriptSearchResult[]> {
   const client = await getDb();
   try {
+    const params: (string | Buffer)[] = [];
+    let where = '';
+    if (channelId) {
+      params.push(channelId);
+      where = 'WHERE v.channel_id = $1';
+    }
     const { rows } = await client.query(
       `SELECT tc.text, tc.start_ms, tc.end_ms, tc.embedding,
               v.video_id, v.title AS video_title, v.channel_id,
@@ -220,7 +234,9 @@ export async function searchAcross(query: string, k = 20): Promise<TranscriptSea
        FROM transcript_chunks tc
        JOIN videos v   ON v.video_id = tc.video_id
        JOIN channels c  ON c.channel_id = v.channel_id
+       ${where}
        ORDER BY tc.video_id, tc.chunk_index`,
+      params,
     );
 
     if (rows.length === 0) return [];

@@ -21,13 +21,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { TranscriptSegment } from './types';
+import { transcribeWithWhisper, isWhisperEnabled } from './whisper';
 
 export interface TranscriptResult {
   text: string;
-  source: 'timedtext' | 'yt-dlp';
+  source: 'timedtext' | 'yt-dlp' | 'whisper';
   /** Approx char count of the cleaned text — handy for truncation decisions. */
   length: number;
-  /** Timestamped segments. Populated for XML (timedtext) and VTT (yt-dlp). */
+  /** Timestamped segments. Populated for XML (timedtext), VTT (yt-dlp), and Whisper (verbose_json/SRT). */
   segments?: TranscriptSegment[];
 }
 
@@ -56,6 +57,28 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptResult
       length: viaYtDlp.text.length,
       segments: viaYtDlp.segments,
     };
+  }
+
+  // 3. Whisper speech-to-text fallback (TAV-19). Triggers only when no YouTube
+  //    captions exist at all and a Whisper backend is configured (OpenAI API
+  //    key or whisper.cpp binary). Uncaptioned videos (~40% of the catalog)
+  //    become summarizable through this path.
+  if (isWhisperEnabled()) {
+    const viaWhisper = await transcribeWithWhisper(videoId).catch(err => {
+      // whisper.ts logs internally, but a null return with no breadcrumb here
+      // makes a failing backend hard to trace from the fetch path — leave a
+      // short warning at the call site too.
+      console.warn(`fetchTranscript: Whisper fallback failed for ${videoId}:`, err instanceof Error ? err.message : err);
+      return null;
+    });
+    if (viaWhisper && viaWhisper.text.trim().length > 40) {
+      return {
+        text: viaWhisper.text,
+        source: 'whisper',
+        length: viaWhisper.text.length,
+        segments: viaWhisper.segments,
+      };
+    }
   }
 
   return null;

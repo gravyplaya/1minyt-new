@@ -45,11 +45,39 @@ export interface MetricsSummary {
   total_interactions: number;
 }
 
+/**
+ * TAV-24: Coverage / habit tracking.
+ *
+ * One bucket per ISO week. `new_count` is videos first cached during that week
+ * (`created_at` is when the row entered our DB, i.e. the sync that pulled it).
+ * `processed_count` is those videos the user has since summarized OR triaged in
+ * the inbox (any `video_states` row — seen or saved both count as "I looked at
+ * it"). `coverage` is processed / new, clamped to [0, 1]; 0 when no new videos.
+ */
+export interface WeeklyBucket {
+  /** Unix seconds at the start of the ISO week (Monday 00:00 local). */
+  week_start: number;
+  new_count: number;
+  processed_count: number;
+  /** 0..1; 0 when new_count === 0 (nothing to cover). */
+  coverage: number;
+}
+
+export interface CoverageStat {
+  /** The week containing now (may be partial — week isn't over yet). */
+  current_week: WeeklyBucket;
+  /** Consecutive weeks (ending at the current week) with ≥50% coverage. */
+  streak_weeks: number;
+  /** Last 12 weeks, newest first, for the sparkline/history. */
+  history: WeeklyBucket[];
+}
+
 export interface MetricsResult {
   summary: MetricsSummary;
   top_channels: ChannelInteraction[];
   top_videos: VideoInteraction[];
   top_topics: TopicCount[];
+  coverage: CoverageStat;
 }
 
 // ----- queries ---------------------------------------------------------------
@@ -235,12 +263,105 @@ export async function metricsSummary(): Promise<MetricsSummary> {
   }
 }
 
+/**
+ * TAV-24: Weekly coverage buckets — the "are you keeping up?" metric.
+ *
+ * For each ISO week in the last 12 weeks we count:
+ *   - new_count:      videos first cached during that week (`videos.created_at`
+ *                     is the sync that pulled the row into our DB)
+ *   - processed_count: those same videos that the user has since summarized OR
+ *                     triaged in the inbox (any `video_states` row counts as
+ *                     "looked at" — seen or saved both qualify)
+ *
+ * "Processed" is constrained to the week's new videos so the ratio answers the
+ * right question: "of the videos that arrived this week, how many did I deal
+ * with?" — not "how many total summaries did I make this week".
+ */
+export async function coverageStats(weeks = 12): Promise<CoverageStat> {
+  const client = await getDb();
+  try {
+    // Bucket videos.created_at into ISO weeks. Postgres `date_trunc('week',…)`
+    // gives Monday 00:00 local time; we convert that to unix seconds. We only
+    // consider non-hidden channels so music/hidden subscriptions don't inflate
+    // the new-count (they're filtered out of the inbox too).
+    const { rows } = await client.query<{
+      week_start: number;
+      new_count: number;
+      processed_count: number;
+    }>(
+      `WITH weeks AS (
+         SELECT generate_series(
+           floor(extract(epoch from date_trunc('week', now() - ($1::int * interval '1 week'))))::bigint,
+           floor(extract(epoch from date_trunc('week', now())))::bigint,
+           604800
+         ) AS ws
+       ),
+       buckets AS (
+         SELECT
+           floor(extract(epoch from date_trunc('week', to_timestamp(v.created_at))))::bigint AS ws,
+           COUNT(*) AS new_count,
+           COUNT(CASE WHEN sm.video_id IS NOT NULL OR vs.video_id IS NOT NULL THEN 1 END) AS processed_count
+         FROM videos v
+         JOIN channels c ON c.channel_id = v.channel_id
+         LEFT JOIN summaries sm ON sm.video_id = v.video_id
+         LEFT JOIN video_states vs ON vs.video_id = v.video_id
+         WHERE c.hidden = 0
+           AND v.created_at >= floor(extract(epoch from date_trunc('week', now() - ($1::int * interval '1 week'))))::bigint
+         GROUP BY 1
+       )
+       SELECT w.ws AS week_start,
+              COALESCE(b.new_count, 0) AS new_count,
+              COALESCE(b.processed_count, 0) AS processed_count
+       FROM weeks w
+       LEFT JOIN buckets b ON b.ws = w.ws
+       ORDER BY w.ws ASC`,
+      [weeks - 1],
+    );
+
+    const buckets: WeeklyBucket[] = rows.map(r => {
+      const newCount = Number(r.new_count);
+      const processed = Number(r.processed_count);
+      return {
+        week_start: Number(r.week_start),
+        new_count: newCount,
+        processed_count: processed,
+        coverage: newCount === 0 ? 0 : Math.min(1, processed / newCount),
+      };
+    });
+
+    // Streak: consecutive weeks (newest → oldest) with ≥50% coverage. The
+    // current (partial) week counts too — if you've already processed half the
+    // new arrivals before the week is over, that's a strong signal.
+    let streak_weeks = 0;
+    for (let i = buckets.length - 1; i >= 0; i--) {
+      if (buckets[i].coverage >= 0.5) streak_weeks++;
+      else break;
+    }
+
+    const current_week = buckets[buckets.length - 1] ?? {
+      week_start: Math.floor(Date.now() / 1000),
+      new_count: 0,
+      processed_count: 0,
+      coverage: 0,
+    };
+
+    return {
+      current_week,
+      streak_weeks,
+      history: buckets.slice().reverse(), // newest first for display
+    };
+  } finally {
+    client.release();
+  }
+}
+
 export async function getMetrics(): Promise<MetricsResult> {
-  const [summary, top_channels, top_videos, top_topics] = await Promise.all([
+  const [summary, top_channels, top_videos, top_topics, coverage] = await Promise.all([
     metricsSummary(),
     topChannelsByInteraction(10),
     topVideosByInteraction(10),
     topTopicsByInteraction(10),
+    coverageStats(),
   ]);
-  return { summary, top_channels, top_videos, top_topics };
+  return { summary, top_channels, top_videos, top_topics, coverage };
 }

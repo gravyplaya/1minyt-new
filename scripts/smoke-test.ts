@@ -38,6 +38,10 @@ async function main() {
     synced_at: now,
     created_at: now,
     updated_at: now,
+    // TAV-17: new persisted fields (null for test rows).
+    topic_categories: null,
+    banner_image_url: null,
+    branding_keywords: null,
   };
 
   await upsertChannel(channel);
@@ -66,6 +70,32 @@ async function main() {
     tags: fetched.tag_ids.length,
     listCount: all.length,
   });
+
+  // TAV-26: assert the playlist tables + indexes exist and are queryable.
+  const schemaClient = await getDb();
+  try {
+    const tableChecks = await schemaClient.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public'
+         AND table_name IN ('channel_playlists', 'playlist_videos', 'playlist_summaries')`,
+    );
+    const found = new Set(tableChecks.rows.map(r => r.table_name));
+    for (const t of ['channel_playlists', 'playlist_videos', 'playlist_summaries']) {
+      if (!found.has(t)) throw new Error(`table ${t} not created`);
+    }
+    const idxChecks = await schemaClient.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND indexname IN ('idx_channel_playlists_channel', 'idx_playlist_videos_position', 'uq_playlist_summary')`,
+    );
+    const idxFound = new Set(idxChecks.rows.map(r => r.indexname));
+    for (const i of ['idx_channel_playlists_channel', 'idx_playlist_videos_position', 'uq_playlist_summary']) {
+      if (!idxFound.has(i)) throw new Error(`index ${i} not created`);
+    }
+  } finally {
+    schemaClient.release();
+  }
+  console.log('SMOKE OK — TAV-26 playlist tables + indexes verified');
 
   // Cleanup
   await deleteChannel(channelId);

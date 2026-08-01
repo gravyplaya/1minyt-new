@@ -280,4 +280,24 @@ button { font: inherit; }
   .follow-up-reason {
     max-width: none !important;
   }
+
+  /* Inbox — filters wrap, rows stack like video rows */
+  .inbox-filter-select {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .inbox-row .video-row-header {
+    grid-template-columns: 100px 1fr !important;
+    gap: 10px !important;
+  }
+  .inbox-row .video-row-thumb {
+    width: 100px !important;
+    height: 56px !important;
+  }
+  .inbox-row .video-row-actions {
+    grid-column: 1 / -1 !important;
+    justify-content: flex-end !important;
+    flex-wrap: wrap !important;
+  }
 }

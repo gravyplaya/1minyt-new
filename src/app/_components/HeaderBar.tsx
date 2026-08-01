@@ -2,7 +2,8 @@ import Link from 'next/link';
 import type { UserProfile } from '@/lib/tokens';
 
 /**
- * The top app bar. Kept tiny — there's no global nav in Phase 1.
+ * The top app bar. Navigation lives in the left sidebar (home page);
+ * this header keeps only the brand and the connected-account indicator.
  */
 export function HeaderBar({ connected, profile }: { connected: boolean; profile?: UserProfile | null }) {
   return (
@@ -22,9 +23,6 @@ export function HeaderBar({ connected, profile }: { connected: boolean; profile?
         <span className="header-subtitle" style={{ color: '#5a5a64', fontSize: 13, marginLeft: 4 }}>subscriptions</span>
       </Link>
       <div className="header-meta" style={{ marginLeft: 'auto', display: 'flex', gap: 16, alignItems: 'center', fontSize: 12, color: '#8b8b94' }}>
-        <Link href="/search" style={{ color: '#c2c2cb', textDecoration: 'none', fontSize: 13 }}>🔍 Search</Link>
-        <Link href="/saved" style={{ color: '#c2c2cb', textDecoration: 'none', fontSize: 13 }}>★ Saved</Link>
-        <Link href="/metrics" style={{ color: '#c2c2cb', textDecoration: 'none', fontSize: 13 }}>📊 Metrics</Link>
         {connected && profile?.displayName ? (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             {profile.avatarUrl && (

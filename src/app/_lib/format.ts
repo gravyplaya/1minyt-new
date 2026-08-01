@@ -42,6 +42,11 @@ export function youtubeVideoUrlAt(videoId: string, startSeconds: number): string
   return `https://www.youtube.com/watch?v=${videoId}&t=${startSeconds}s`;
 }
 
+/** YouTube playlist URL (`https://www.youtube.com/playlist?list=PL...`). */
+export function youtubePlaylistUrl(playlistId: string): string {
+  return `https://www.youtube.com/playlist?list=${playlistId}`;
+}
+
 /** Parse an ISO-8601 duration like "PT1H2M3S" into seconds. Returns null on failure. */
 export function parseIso8601Duration(iso: string | null | undefined): number | null {
   if (!iso) return null;

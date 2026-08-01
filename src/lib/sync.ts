@@ -67,6 +67,10 @@ export async function syncSubscriptions(): Promise<SyncResult> {
         synced_at: now,
         created_at: now,
         updated_at: now,
+        // TAV-17: persist previously-discarded fields.
+        topic_categories: jsonString(ch?.topicDetails?.topicCategories ?? null),
+        banner_image_url: ch?.brandingSettings?.image?.bannerImageUrl ?? null,
+        branding_keywords: jsonString(ch?.brandingSettings?.channel?.keywords ?? null),
       };
 
       const { created } = await upsertChannel(row);
@@ -101,6 +105,17 @@ function numeric(v: string | null | undefined): number | null {
   if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * JSON-encode an array-or-string value that arrives from the YouTube API.
+ * Returns null when the input is null/empty so the column stays clean.
+ */
+function jsonString(v: string[] | string | null | undefined): string | null {
+  if (v == null) return null;
+  if (typeof v === 'string') return v.trim() === '' ? null : JSON.stringify(v.trim());
+  if (Array.isArray(v)) return v.length === 0 ? null : JSON.stringify(v);
+  return null;
 }
 
 function parseIsoDate(iso: string | null | undefined): number | null {

@@ -2,6 +2,9 @@ import Link from 'next/link';
 import { countChannels, CHANNEL_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '@/lib/queries';
 import { listFolders, listTags, latestSyncRun } from '@/lib/repo';
 import { isConnected, getUserProfile } from '@/lib/tokens';
+import { countInboxNew } from '@/lib/inbox';
+import { countQueued } from '@/lib/summarize-queue';
+import { countSummarizedVideos } from '@/lib/video-repo';
 import { SyncButton } from './_components/SyncButton';
 import { ExportButton } from './_components/ExportButton';
 import { AddFolderForm, AddTagForm } from './_components/AddFolderTagForms';
@@ -26,13 +29,16 @@ interface PageProps {
 
 export default async function HomePage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const [connected, profile, lastSync, folders, tags, counts] = await Promise.all([
+  const [connected, profile, lastSync, folders, tags, counts, inboxCount, queuedCount, summarizedCount] = await Promise.all([
     isConnected(),
     getUserProfile(),
     latestSyncRun(),
     listFolders(),
     listTags(),
     countChannels(),
+    countInboxNew(),
+    countQueued(),
+    countSummarizedVideos(),
   ]);
 
   const activeFolder = params.folder ?? null;
@@ -76,6 +82,27 @@ export default async function HomePage({ searchParams }: PageProps) {
         <ResponsiveSidebar>
           <section>
             <h3 style={sidebarHeading}>Library</h3>
+            <SidebarLink href="/inbox" active={false}>
+              <span>📥</span> Inbox {inboxCount > 0 && <Badge>{inboxCount}</Badge>}
+            </SidebarLink>
+            <SidebarLink href="/summarized" active={false}>
+              <span>✦</span> Summarized {summarizedCount > 0 && <Badge>{summarizedCount}</Badge>}
+            </SidebarLink>
+            <SidebarLink href="/summarize-later" active={false}>
+              <span>🔖</span> Summarize Later {queuedCount > 0 && <Badge>{queuedCount}</Badge>}
+            </SidebarLink>
+            <SidebarLink href="/search" active={false}>
+              <span>🔍</span> Search
+            </SidebarLink>
+            <SidebarLink href="/saved" active={false}>
+              <span>★</span> Saved
+            </SidebarLink>
+            <SidebarLink href="/digests" active={false}>
+              <span>📋</span> Digests
+            </SidebarLink>
+            <SidebarLink href="/metrics" active={false}>
+              <span>📊</span> Metrics
+            </SidebarLink>
             <SidebarLink href={urlWith({ folder: null, tag: null, showMusic: null })} active={!activeFolder && !activeTag && !showMusic}>
               <span>📺</span> All channels <Badge>{counts.total}</Badge>
             </SidebarLink>

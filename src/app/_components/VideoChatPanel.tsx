@@ -14,9 +14,17 @@ import { youtubeVideoUrl } from '../_lib/format';
  * Lifecycle:
  *  - On open: load chat history + check if video is indexed.
  *  - On send: auto-index if needed, retrieve chunks via RAG, generate answer.
- *  - Citations render as clickable timestamps linking to YouTube at ?t=Ns.
+ *  - Citations render as clickable timestamps. When an embedded player is
+ *    present (TAV-21), clicking a citation seeks the player in place; absent
+ *    an embedded player, they fall back to opening YouTube at ?t=Ns.
  */
-export function VideoChatPanel({ videoId }: { videoId: string }) {
+export interface VideoChatPanelProps {
+  videoId: string;
+  /** Optional seek callback wired to the embedded YouTube player (TAV-21). */
+  onSeek?: (seconds: number) => void;
+}
+
+export function VideoChatPanel({ videoId, onSeek }: VideoChatPanelProps) {
   const [pending, start] = useTransition();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [citations, setCitations] = useState<ChatCitation[]>([]);
@@ -113,7 +121,7 @@ export function VideoChatPanel({ videoId }: { videoId: string }) {
           </div>
         )}
         {messages.map(msg => (
-          <MessageBubble key={msg.id} msg={msg} videoId={videoId} />
+          <MessageBubble key={msg.id} msg={msg} videoId={videoId} onSeek={onSeek} />
         ))}
         {pending && (
           <div style={{ color: '#8b8b94', fontSize: 13, fontStyle: 'italic' }}>
@@ -126,6 +134,11 @@ export function VideoChatPanel({ videoId }: { videoId: string }) {
           </div>
         )}
       </div>
+
+      {/* Citations for the latest assistant answer (TAV-21: click-to-seek). */}
+      {citations.length > 0 && (
+        <CitationList citations={citations} videoId={videoId} onSeek={onSeek} />
+      )}
 
       {/* Input */}
       <div style={{ padding: '10px 14px', borderTop: '1px solid #2a2a33', display: 'flex', gap: 8 }}>
@@ -161,7 +174,7 @@ export function VideoChatPanel({ videoId }: { videoId: string }) {
   );
 }
 
-function MessageBubble({ msg, videoId }: { msg: ChatMessage; videoId: string }) {
+function MessageBubble({ msg, videoId, onSeek }: { msg: ChatMessage; videoId: string; onSeek?: (seconds: number) => void }) {
   const isUser = msg.role === 'user';
   return (
     <div style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
@@ -179,7 +192,7 @@ function MessageBubble({ msg, videoId }: { msg: ChatMessage; videoId: string }) 
           wordBreak: 'break-word',
         }}
       >
-        {renderAnswerWithCitations(msg.content, videoId)}
+        {renderAnswerWithCitations(msg.content, videoId, onSeek)}
       </div>
     </div>
   );
@@ -191,8 +204,11 @@ function MessageBubble({ msg, videoId }: { msg: ChatMessage; videoId: string }) 
  * We handle two citation styles the model may emit:
  *  - [1] with a separate citations list → link to the cited chunk's timestamp
  *  - [2:34] inline timestamp → link directly to that moment
+ *
+ * When an embedded player is available (TAV-21), inline timestamp links seek
+ * the player in place instead of opening a new YouTube tab.
  */
-function renderAnswerWithCitations(text: string, videoId: string): React.ReactNode {
+function renderAnswerWithCitations(text: string, videoId: string, onSeek?: (seconds: number) => void): React.ReactNode {
   // Pattern: [N] or [M:SS] or [H:MM:SS]
   const pattern = /\[(\d+)(?::\d{1,2})?(?::\d{2})?\]/g;
   const parts: React.ReactNode[] = [];
@@ -214,17 +230,42 @@ function renderAnswerWithCitations(text: string, videoId: string): React.ReactNo
     if (tsMatch) {
       // Inline timestamp like [2:34] — link directly.
       const seconds = parseTimestampToSeconds(inner);
-      parts.push(
-        <a
-          key={`cite-${key++}`}
-          href={seconds != null ? `${youtubeVideoUrl(videoId)}&t=${seconds}s` : youtubeVideoUrl(videoId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: '#5b9eff', textDecoration: 'none', fontWeight: 500 }}
-        >
-          {fullMatch}
-        </a>
-      );
+      if (onSeek && seconds != null) {
+        // TAV-21: seek the embedded player in place.
+        parts.push(
+          // eslint-disable-next-line jsx-a11y/anchor-is-valid
+          <a
+            key={`cite-${key++}`}
+            role="button"
+            tabIndex={0}
+            onClick={(e: React.MouseEvent) => {
+              e.preventDefault();
+              onSeek(seconds);
+            }}
+            onKeyDown={(e: React.KeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSeek(seconds);
+              }
+            }}
+            style={{ color: '#5b9eff', textDecoration: 'none', fontWeight: 500, cursor: 'pointer' }}
+          >
+            {fullMatch}
+          </a>
+        );
+      } else {
+        parts.push(
+          <a
+            key={`cite-${key++}`}
+            href={seconds != null ? `${youtubeVideoUrl(videoId)}&t=${seconds}s` : youtubeVideoUrl(videoId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: '#5b9eff', textDecoration: 'none', fontWeight: 500 }}
+          >
+            {fullMatch}
+          </a>
+        );
+      }
     } else {
       // Bare citation number like [1] — keep as-is (no direct link without the
       // citations array mapping, but the answer text itself is still useful).
@@ -244,6 +285,95 @@ function renderAnswerWithCitations(text: string, videoId: string): React.ReactNo
   }
 
   return parts.length > 0 ? parts : text;
+}
+
+/**
+ * TAV-21: Citation chips for the latest assistant answer. Clicking a chip
+ * seeks the embedded player to the chunk's start time when available;
+ * otherwise it opens YouTube at that timestamp.
+ */
+function CitationList({
+  citations,
+  videoId,
+  onSeek,
+}: {
+  citations: ChatCitation[];
+  videoId: string;
+  onSeek?: (seconds: number) => void;
+}) {
+  return (
+    <div style={{ padding: '8px 14px', borderTop: '1px solid #2a2a33', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: 11, color: '#8b8b94', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+        Citations
+      </div>
+      {citations.map((c, i) => {
+        const seconds = Math.floor(c.start_ms / 1000);
+        const label = formatMs(c.start_ms);
+        const href = `${youtubeVideoUrl(videoId)}&t=${seconds}s`;
+        return (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'baseline',
+              fontSize: 12,
+              lineHeight: 1.4,
+              padding: '4px 8px',
+              borderRadius: 6,
+              background: '#1a1a20',
+              border: '1px solid #2a2a33',
+            }}
+          >
+            {onSeek ? (
+              // eslint-disable-next-line jsx-a11y/anchor-is-valid
+              <a
+                role="button"
+                tabIndex={0}
+                onClick={(e: React.MouseEvent) => {
+                  e.preventDefault();
+                  onSeek(seconds);
+                }}
+                onKeyDown={(e: React.KeyboardEvent) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSeek(seconds);
+                  }
+                }}
+                style={{ color: '#7db5ff', fontFamily: 'monospace', minWidth: 48, cursor: 'pointer', textDecoration: 'none' }}
+                title="Jump to this moment"
+              >
+                {label}
+              </a>
+            ) : (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: '#7db5ff', fontFamily: 'monospace', minWidth: 48, textDecoration: 'none' }}
+              >
+                {label}
+              </a>
+            )}
+            <span style={{ color: '#a0a0a8', minWidth: 0 }}>
+              {c.text.length > 160 ? c.text.slice(0, 160) + '…' : c.text}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Format milliseconds as M:SS (or H:MM:SS) for citation chip labels. */
+function formatMs(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const s = totalSeconds % 60;
+  const m = Math.floor((totalSeconds / 60) % 60);
+  const h = Math.floor(totalSeconds / 3600);
+  const ss = String(s).padStart(2, '0');
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${ss}`;
+  return `${m}:${ss}`;
 }
 
 /** Parse "2:34" or "1:02:34" into seconds for YouTube ?t=Ns links. */

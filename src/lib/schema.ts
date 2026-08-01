@@ -41,6 +41,13 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_channels_music_flag ON channels(music_flag)`,
   `CREATE INDEX IF NOT EXISTS idx_channels_subscriber ON channels(subscriber_count)`,
 
+  // TAV-17: persist channel fields we already fetch but discard.
+  // topic_categories — JSON array of Freebase/Wikipedia URLs from topicDetails.
+  `ALTER TABLE channels ADD COLUMN IF NOT EXISTS topic_categories TEXT`,
+  // brandingSettings.channel.bannerImageUrl + branding keywords.
+  `ALTER TABLE channels ADD COLUMN IF NOT EXISTS banner_image_url   TEXT`,
+  `ALTER TABLE channels ADD COLUMN IF NOT EXISTS branding_keywords  TEXT`,
+
   `CREATE TABLE IF NOT EXISTS folders (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
@@ -118,6 +125,24 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id, published_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_videos_status  ON videos(transcript_status)`,
 
+  // TAV-19: track where a transcript came from — 'youtube' (Innertube/yt-dlp
+  // captions) or 'whisper' (speech-to-text fallback). Nullable so the migration
+  // is additive; null is treated as 'youtube' for rows written before this change.
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS transcript_source TEXT`,
+
+  // TAV-17: persist video fields we already fetch but discard.
+  // Engagement stats from `videos.list?part=statistics`.
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS view_count     INTEGER`,
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS like_count    INTEGER`,
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS comment_count INTEGER`,
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS favorite_count INTEGER`,
+  // snippet.tags (JSON array) + snippet.categoryId.
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS tags         TEXT`,
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS category_id  INTEGER`,
+  // liveStreamingDetails + liveBroadcastContent.
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS is_live              INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS live_streaming_details TEXT`,
+
   `CREATE TABLE IF NOT EXISTS summaries (
     id          TEXT PRIMARY KEY,
     video_id    TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
@@ -193,6 +218,146 @@ export const SCHEMA_STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_video_chapters_created ON video_chapters(created_at DESC)`,
+
+  // ----- TAV-14: new-video digests --------------------------------------
+
+  // One row per digest run. `new_video_ids` is a JSON array of video ids that
+  // were first seen during this digest's sync pass. `period_start` / `period_end`
+  // are unix seconds bounding the window of newly-published videos.
+  `CREATE TABLE IF NOT EXISTS digests (
+    id             TEXT PRIMARY KEY,
+    period_start   INTEGER,
+    period_end     INTEGER NOT NULL,
+    video_count    INTEGER NOT NULL DEFAULT 0,
+    new_video_ids  TEXT NOT NULL DEFAULT '[]',
+    channel_count  INTEGER NOT NULL DEFAULT 0,
+    errors         TEXT,
+    created_at     INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_digests_created ON digests(created_at DESC)`,
+
+  // ----- TAV-20: Community Pulse — top comments + summary ----------------------
+  //
+  // One row per video holding the fetched top-level comments (JSON array of
+  // VideoComment) and the LLM-generated community summary. Re-fetched comments
+  // upsert by video_id; the summary is regenerated each summarize run.
+  `CREATE TABLE IF NOT EXISTS video_comments (
+    video_id    TEXT PRIMARY KEY REFERENCES videos(video_id) ON DELETE CASCADE,
+    comments    TEXT NOT NULL DEFAULT '[]',
+    fetched_at  INTEGER NOT NULL,
+    summary     TEXT,
+    summary_model TEXT,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_video_comments_updated ON video_comments(updated_at DESC)`,
+
+  // ----- TAV-22: Unified inbox — per-video triage state -----------------------
+  //
+  // One row per video the user has acted on in the /inbox. `state` is the
+  // triage bucket: 'seen' (dismissed) or 'saved' (bookmark for later).
+  // A video with no row here has not been triaged yet and still appears in
+  // the inbox. Re-triaging a video upserts the state and bumps updated_at.
+  `CREATE TABLE IF NOT EXISTS video_states (
+    video_id   TEXT PRIMARY KEY REFERENCES videos(video_id) ON DELETE CASCADE,
+    state      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_video_states_state ON video_states(state, updated_at DESC)`,
+
+  // ----- TAV-23: Summarize Later queue -----------------------------------------
+  //
+  // A Pocket-style queue of videos the user wants summarized later. One row
+  // per queued video; `state` is 'queued' (waiting) or 'summarized' (the
+  // batch summarize processed it). Re-queuing an already-summarized video
+  // flips it back to 'queued'. Removing from the queue deletes the row.
+  `CREATE TABLE IF NOT EXISTS summarize_queue (
+    id           TEXT PRIMARY KEY,
+    video_id     TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    state        TEXT NOT NULL DEFAULT 'queued',
+    queued_at    INTEGER NOT NULL,
+    summarized_at INTEGER,
+    created_at   INTEGER NOT NULL
+  )`,
+
+  // One active queue entry per video — re-queuing upserts in place.
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_summarize_queue_video ON summarize_queue(video_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_summarize_queue_state ON summarize_queue(state, queued_at DESC)`,
+
+  // ----- TAV-26: Curated channel playlists -----------------------------------
+  //
+  // One row per public playlist a channel curates ("Start Here", "Best
+  // Interviews", etc.). The playlist_id is YouTube's own id (the `PL...`
+  // string). Re-fetching a channel's playlists upserts by playlist_id.
+  `CREATE TABLE IF NOT EXISTS channel_playlists (
+    playlist_id    TEXT PRIMARY KEY,
+    channel_id     TEXT NOT NULL REFERENCES channels(channel_id) ON DELETE CASCADE,
+    title          TEXT NOT NULL,
+    description    TEXT,
+    thumbnail_url  TEXT,
+    item_count     INTEGER,
+    published_at   INTEGER,
+    synced_at      INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_channel_playlists_channel ON channel_playlists(channel_id, title)`,
+
+  // One row per video position in a curated playlist. The composite PK
+  // (playlist_id, video_id) means a video can appear in many playlists but only
+  // once per playlist. Re-fetching a playlist's videos upserts positions.
+  `CREATE TABLE IF NOT EXISTS playlist_videos (
+    playlist_id    TEXT NOT NULL REFERENCES channel_playlists(playlist_id) ON DELETE CASCADE,
+    video_id       TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    description    TEXT,
+    thumbnail_url  TEXT,
+    position       INTEGER NOT NULL,
+    published_at   INTEGER,
+    synced_at      INTEGER NOT NULL,
+    PRIMARY KEY (playlist_id, video_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_playlist_videos_position ON playlist_videos(playlist_id, position)`,
+
+  // One row per playlist, holding the LLM-generated synthesis of the whole
+  // collection. Re-summarizing upserts by playlist_id.
+  `CREATE TABLE IF NOT EXISTS playlist_summaries (
+    id             TEXT PRIMARY KEY,
+    playlist_id    TEXT NOT NULL REFERENCES channel_playlists(playlist_id) ON DELETE CASCADE,
+    model          TEXT NOT NULL,
+    synthesis      TEXT NOT NULL,
+    themes         TEXT NOT NULL DEFAULT '[]',
+    start_here     TEXT NOT NULL DEFAULT '[]',
+    token_count    INTEGER,
+    created_at     INTEGER NOT NULL
+  )`,
+
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_playlist_summary ON playlist_summaries(playlist_id)`,
+
+  // ----- TAV-29: Video reference graph — cross-video citations ----------------
+  //
+  // One row per directed edge: a source video's summary cited a target video
+  // (or channel) as a follow-up. The edge carries the follow-up reason text so
+  // the graph view can show *why* the connection exists. Re-summarizing a video
+  // replaces its outgoing edges (delete-then-insert by source_video_id) so the
+  // graph stays in sync with the latest summary.
+  `CREATE TABLE IF NOT EXISTS video_references (
+    id              TEXT PRIMARY KEY,
+    source_video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    target_video_id TEXT,
+    target_channel_id TEXT,
+    reference_type  TEXT NOT NULL,
+    context         TEXT,
+    created_at      INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_video_refs_source ON video_references(source_video_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_video_refs_target_video ON video_references(target_video_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_video_refs_target_channel ON video_references(target_channel_id)`,
+
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

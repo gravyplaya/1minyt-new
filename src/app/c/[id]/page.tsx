@@ -3,9 +3,13 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { getChannel, listFolders, listTags } from '@/lib/repo';
 import { listVideosByChannel } from '@/lib/video-repo';
+import { listChannelPlaylists } from '@/lib/playlist-repo';
 import { HeaderBar } from '../../_components/HeaderBar';
 import { ChannelEditor } from '../../_components/ChannelEditor';
 import { VideosPanel } from '../../_components/VideosPanel';
+import { ChannelCatalogSearch } from '../../_components/ChannelCatalogSearch';
+import { ChannelPlaylists } from '../../_components/ChannelPlaylists';
+import { MostReferencedSection } from '../../_components/MostReferencedSection';
 import { ExportButton } from '../../_components/ExportButton';
 import { formatCount, formatRelative, youtubeChannelUrl } from '../../_lib/format';
 import { isConnected, getUserProfile } from '@/lib/tokens';
@@ -21,12 +25,13 @@ export default async function ChannelPage({ params }: Props) {
   const channel = await getChannel(id);
   if (!channel) notFound();
 
-  const [folders, tags, connected, profile, videos] = await Promise.all([
+  const [folders, tags, connected, profile, videos, playlists] = await Promise.all([
     listFolders(),
     listTags(),
     isConnected(),
     getUserProfile(),
     listVideosByChannel(channel.channel_id, 30),
+    listChannelPlaylists(channel.channel_id),
   ]);
 
   return (
@@ -78,6 +83,12 @@ export default async function ChannelPage({ params }: Props) {
         </header>
 
         <ChannelEditor channel={channel} folders={folders} tags={tags} />
+
+        {connected && <ChannelCatalogSearch channelId={channel.channel_id} />}
+
+        <ChannelPlaylists channelId={channel.channel_id} initialPlaylists={playlists} connected={connected} />
+
+        <MostReferencedSection />
 
         <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
           <ExportButton channelId={channel.channel_id} summaryCount={videos.filter(v => v.summary).length} />
