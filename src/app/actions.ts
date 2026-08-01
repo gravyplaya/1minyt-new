@@ -1034,3 +1034,81 @@ export async function summarizePlaylistAction(playlistId: string): Promise<Summa
     return { ok: false, playlistId, error: msg };
   }
 }
+
+// ----- TAV-27: Read-later integrations (Readwise / Notion / Obsidian) --------
+
+export interface IntegrationSettingsOutcome {
+  ok: boolean;
+  key: string;
+  /** Whether a token is currently saved for this integration. */
+  configured: boolean;
+  error?: string;
+}
+
+/** Save (or clear, when the token is empty) the settings for one integration. */
+export async function saveIntegrationSettingsAction(
+  key: 'readwise' | 'notion' | 'obsidian',
+  token: string,
+  options?: Record<string, string>,
+): Promise<IntegrationSettingsOutcome> {
+  try {
+    const { saveIntegrationSettings } = await import('@/lib/integrations');
+    await saveIntegrationSettings(key, token, options);
+    revalidatePath('/settings');
+    return { ok: true, key, configured: token.trim().length > 0 };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, key, configured: false, error: msg };
+  }
+}
+
+export interface SendToIntegrationOutcome {
+  ok: boolean;
+  integration: string;
+  videoId: string;
+  /** URL of the created document in the target system, when the integration returns one. */
+  documentUrl?: string;
+  error?: string;
+}
+
+/**
+ * Send a single bookmarked summary to a read-later integration. Currently only
+ * Readwise is implemented; Notion and Obsidian return a clear "not implemented"
+ * error so the UI can guide the user toward Readwise.
+ */
+export async function sendToIntegrationAction(
+  integration: 'readwise' | 'notion' | 'obsidian',
+  videoId: string,
+): Promise<SendToIntegrationOutcome> {
+  try {
+    const { getIntegrationSettings, buildExportPayload, sendToReadwise, INTEGRATIONS } = await import('@/lib/integrations');
+    const { getBookmarkedSummary } = await import('@/lib/video-repo');
+
+    const meta = INTEGRATIONS.find(i => i.key === integration);
+    if (!meta || !meta.implemented) {
+      return { ok: false, integration, videoId, error: meta ? `${meta.label} integration is not implemented yet.` : 'Unknown integration.' };
+    }
+
+    const settings = await getIntegrationSettings(integration);
+    if (!settings || !settings.token) {
+      return { ok: false, integration, videoId, error: `No ${meta.label} token configured. Add one in Settings.` };
+    }
+
+    const item = await getBookmarkedSummary(videoId);
+    if (!item) {
+      return { ok: false, integration, videoId, error: 'This summary is not bookmarked. Bookmark it first.' };
+    }
+
+    const payload = buildExportPayload(item);
+    if (integration === 'readwise') {
+      const result = await sendToReadwise(payload, settings.token);
+      return { ...result, videoId };
+    }
+    // Unreachable — implemented check above gates this, but TS needs the return.
+    return { ok: false, integration, videoId, error: 'Not implemented.' };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, integration, videoId: videoId, error: msg };
+  }
+}
+

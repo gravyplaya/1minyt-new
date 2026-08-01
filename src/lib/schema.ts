@@ -358,6 +358,20 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_video_refs_target_video ON video_references(target_video_id)`,
   `CREATE INDEX IF NOT EXISTS idx_video_refs_target_channel ON video_references(target_channel_id)`,
 
+  // ----- TAV-27: Read-later integrations (Readwise / Notion / Obsidian) --------
+  //
+  // One row per integration, holding the user-supplied access token / API key
+  // and any integration-specific options (e.g. a Notion database id). The key
+  // is the integration slug ('readwise', 'notion', 'obsidian'). Re-saving a
+  // token upserts by key. Tokens are stored as plaintext in the DB — this app
+  // is a single-user local tool, not a multi-tenant SaaS.
+  `CREATE TABLE IF NOT EXISTS integration_settings (
+    key         TEXT PRIMARY KEY,
+    token       TEXT NOT NULL,
+    options     TEXT NOT NULL DEFAULT '{}',
+    updated_at  INTEGER NOT NULL
+  )`,
+
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

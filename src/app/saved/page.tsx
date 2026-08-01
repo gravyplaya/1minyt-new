@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { HeaderBar } from '../_components/HeaderBar';
+import { SendToReadwiseButton } from '../_components/SendToReadwiseButton';
 import { listBookmarkedSummaries } from '@/lib/video-repo';
+import { getIntegrationSettings } from '@/lib/integrations';
 import { isConnected, getUserProfile } from '@/lib/tokens';
 import { formatRelative, youtubeVideoUrl } from '../_lib/format';
 
@@ -12,11 +14,13 @@ export const metadata = {
 };
 
 export default async function SavedPage() {
-  const [connected, profile, items] = await Promise.all([
+  const [connected, profile, items, readwiseSettings] = await Promise.all([
     isConnected(),
     getUserProfile(),
     listBookmarkedSummaries(),
+    getIntegrationSettings('readwise'),
   ]);
+  const readwiseConfigured = !!readwiseSettings && readwiseSettings.token.length > 0;
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -129,6 +133,15 @@ export default async function SavedPage() {
                     ))}
                   </div>
                 )}
+
+                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <SendToReadwiseButton videoId={video.video_id} readwiseConfigured={readwiseConfigured} />
+                  {!readwiseConfigured && (
+                    <Link href="/settings" style={{ fontSize: 12, color: '#8b8b94', textDecoration: 'none' }}>
+                      Configure Readwise in Settings →
+                    </Link>
+                  )}
+                </div>
               </div>
             ))}
           </div>

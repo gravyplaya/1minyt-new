@@ -1,11 +1,22 @@
 import Link from 'next/link';
 import type { UserProfile } from '@/lib/tokens';
+import { SyncButton } from './SyncButton';
+import { disconnectAction } from '@/app/actions';
 
 /**
  * The top app bar. Navigation lives in the left sidebar (home page);
- * this header keeps only the brand and the connected-account indicator.
+ * this header keeps the brand, sync/disconnect controls, and the
+ * connected-account indicator.
  */
-export function HeaderBar({ connected, profile }: { connected: boolean; profile?: UserProfile | null }) {
+export function HeaderBar({
+  connected,
+  profile,
+  lastSync,
+}: {
+  connected: boolean;
+  profile?: UserProfile | null;
+  lastSync?: number | null;
+}) {
   return (
     <header
       className="header-bar"
@@ -22,7 +33,21 @@ export function HeaderBar({ connected, profile }: { connected: boolean; profile?
         <strong style={{ fontSize: 16, letterSpacing: '-0.01em' }}>1minyt</strong>
         <span className="header-subtitle" style={{ color: '#5a5a64', fontSize: 13, marginLeft: 4 }}>subscriptions</span>
       </Link>
-      <div className="header-meta" style={{ marginLeft: 'auto', display: 'flex', gap: 16, alignItems: 'center', fontSize: 12, color: '#8b8b94' }}>
+      <div className="header-meta" style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, color: '#8b8b94' }}>
+        {connected && (
+          <>
+            <SyncButton lastSync={lastSync ?? null} />
+            <form action={disconnectAction}>
+              <button
+                className="btn btn-ghost"
+                type="submit"
+                style={{ fontSize: 12, padding: '6px 10px' }}
+              >
+                Disconnect
+              </button>
+            </form>
+          </>
+        )}
         {connected && profile?.displayName ? (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             {profile.avatarUrl && (

@@ -449,6 +449,83 @@ export async function listBookmarkedSummaries(): Promise<BookmarkedSummary[]> {
   }
 }
 
+/**
+ * TAV-27: load a single bookmarked summary by video id, joined with its video
+ * + channel. Used by the read-later export actions so we can build the export
+ * payload for one summary without pulling every bookmark. Returns null when
+ * the video has no bookmarked summary.
+ */
+export async function getBookmarkedSummary(videoId: string): Promise<BookmarkedSummary | null> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query<{
+      id: string;
+      video_id: string;
+      model: string;
+      tldr: string;
+      key_points: string;
+      follow_ups: string;
+      topics: string | null;
+      prompt: string;
+      token_count: number | null;
+      created_at: number;
+      bookmarked: number;
+      v_title: string;
+      v_thumb: string | null;
+      v_channel_id: string;
+      v_published_at: number | null;
+      v_duration: number | null;
+      c_title: string;
+    }>(
+      `SELECT
+         s.id, s.video_id, s.model, s.tldr, s.key_points, s.follow_ups,
+         s.topics, s.prompt, s.token_count, s.created_at, s.bookmarked,
+         v.title        AS v_title,
+         v.thumbnail_url AS v_thumb,
+         v.channel_id    AS v_channel_id,
+         v.published_at  AS v_published_at,
+         v.duration_seconds AS v_duration,
+         c.title         AS c_title
+       FROM summaries s
+       JOIN videos  v ON v.video_id = s.video_id
+       JOIN channels c ON c.channel_id = v.channel_id
+       WHERE s.bookmarked = 1 AND s.video_id = $1
+       ORDER BY s.created_at DESC
+       LIMIT 1`,
+      [videoId],
+    );
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    const summary = hydrateSummary({
+      id: r.id,
+      video_id: r.video_id,
+      model: r.model,
+      tldr: r.tldr,
+      key_points: r.key_points,
+      follow_ups: r.follow_ups,
+      topics: r.topics,
+      prompt: r.prompt,
+      token_count: r.token_count,
+      created_at: r.created_at,
+      bookmarked: r.bookmarked,
+    });
+    return {
+      summary,
+      video: {
+        video_id: r.video_id,
+        title: r.v_title,
+        thumbnail_url: r.v_thumb,
+        channel_id: r.v_channel_id,
+        published_at: r.v_published_at,
+        duration_seconds: r.v_duration,
+      },
+      channelTitle: r.c_title,
+    };
+  } finally {
+    client.release();
+  }
+}
+
 // ----- TAV-31: all summarized videos -----------------------------------------
 
 /**
