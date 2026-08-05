@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type {
   Chapter,
   CommunityPulse,
+  MusicFlag,
   TranscriptSegment,
   TranscriptSource,
   VideoWithSummary,
@@ -13,6 +14,7 @@ import {
   fetchTranscriptAction,
   summarizeVideoAction,
   toggleBookmarkAction,
+  toggleVideoLikeAction,
   getSegmentsAction,
   addToQueueAction,
 } from "@/app/actions";
@@ -20,7 +22,6 @@ import { formatMmSs } from "@/lib/chapters";
 import {
   formatRelative,
   youtubeVideoUrl,
-  youtubeVideoUrlAt,
 } from "../_lib/format";
 import { VideoChatPanel } from "./VideoChatPanel";
 import { YouTubePlayer, type YouTubePlayerHandle } from "./YouTubePlayer";
@@ -47,9 +48,11 @@ type Stage = "idle" | "transcribing" | "summarizing" | "done" | "error";
 export function VideoSummaryRow({
   video,
   channelId,
+  musicFlag = 0,
 }: {
   video: VideoWithSummary;
   channelId: string;
+  musicFlag?: MusicFlag;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -79,6 +82,12 @@ export function VideoSummaryRow({
     summary?.bookmarked === 1,
   );
   const [bookmarkPending, startBookmark] = useTransition();
+  const [liked, setLiked] = useState<boolean>(video.liked);
+  const [likePending, startLike] = useTransition();
+  // TAV-41: like state is now hydrated server-side (video.liked) by the list
+  // queries, so we no longer fire a per-row getLikeStateAction on mount — that
+  // was causing ~1 server-action call per row (≈100 on /likes). Keep a local
+  // copy so the heart toggles optimistically; router.refresh() reconciles.
   // TAV-23: Summarize Later queue state.
   const [queued, setQueued] = useState(false);
   const [queuePending, startQueue] = useTransition();
@@ -163,6 +172,8 @@ export function VideoSummaryRow({
   const hasSummary = Boolean(summary);
   const showSummary = hasSummary && expanded;
   const isWorking = stage === "transcribing" || stage === "summarizing";
+  // Music channels have no transcripts — hide summarize/chat/queue actions.
+  const isMusic = musicFlag === 1;
 
   const toggleBookmark = () => {
     if (!summary) return; // nothing to bookmark yet
@@ -288,7 +299,7 @@ export function VideoSummaryRow({
               {expanded ? "Hide" : "View"}
             </button>
           )}
-          {(hasSummary || video.transcript_status === "fetched") &&
+          {!(isMusic) && (hasSummary || video.transcript_status === "fetched") &&
             !isWorking && (
               <button
                 type="button"
@@ -315,6 +326,27 @@ export function VideoSummaryRow({
             <button
               type="button"
               className="btn btn-ghost"
+              onClick={() => startLike(async () => {
+                const outcome = await toggleVideoLikeAction(video.video_id);
+                if (outcome.ok) {
+                  setLiked(outcome.liked);
+                } else {
+                  // TAV-41: revert optimistic state on failure, mirroring the
+                  // bookmark/queue pattern — otherwise a failed insert silently
+                  // leaves the heart in the wrong color.
+                  setLiked(prev => !prev);
+                }
+              })}
+              disabled={likePending}
+              title={liked ? "Unlike this video" : "Like this video"}
+              aria-pressed={liked}
+              style={{ fontSize: 16, padding: "4px 8px", lineHeight: 1, color: liked ? "#ff6b8a" : "#8b8b94" }}
+            >{liked ? "♥" : "♡"}</button>
+          )}
+          {hasSummary && !isWorking && (
+            <button
+              type="button"
+              className="btn btn-ghost"
               onClick={toggleBookmark}
               disabled={bookmarkPending}
               title={bookmarked ? "Remove bookmark" : "Bookmark this summary"}
@@ -325,61 +357,61 @@ export function VideoSummaryRow({
                 lineHeight: 1,
                 color: bookmarked ? "#f5c542" : "#8b8b94",
                 background: bookmarked ? "rgba(245,197,66,0.12)" : undefined,
-                border: bookmarked
-                  ? "1px solid rgba(245,197,66,0.3)"
-                  : undefined,
+                border: bookmarked ? "1px solid rgba(245,197,66,0.3)" : undefined,
               }}
-            >
-              {bookmarked ? "★" : "☆"}
-            </button>
+            >{bookmarked ? "★" : "☆"}</button>
           )}
           {/* TAV-23: Add to Summarize Later queue */}
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={addToQueue}
-            disabled={queuePending || queued}
-            title={
-              queued
-                ? "Added to Summarize Later queue"
-                : "Add to Summarize Later queue"
-            }
-            aria-pressed={queued}
-            style={{
-              fontSize: 14,
-              padding: "4px 8px",
-              lineHeight: 1,
-              color: queued ? "#7c5cff" : "#8b8b94",
-              background: queued ? "rgba(124,92,255,0.12)" : undefined,
-              border: queued ? "1px solid rgba(124,92,255,0.3)" : undefined,
-            }}
-          >
-            {queued ? "✓" : "🔖"}
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={summarize}
-            disabled={
-              pending ||
-              queuePending ||
-              video.transcript_status === "unavailable"
-            }
-            title={
-              video.transcript_status === "unavailable"
-                ? "No captions available"
-                : "Generate a 1-click summary"
-            }
-            style={{ fontSize: 12, padding: "6px 12px" }}
-          >
-            {stage === "transcribing"
-              ? "Fetching transcript…"
-              : stage === "summarizing"
-                ? "Summarizing…"
-                : hasSummary
-                  ? "Re-summarize"
-                  : "⚡ Summarize"}
-          </button>
+          {!(isMusic) && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={addToQueue}
+              disabled={queuePending || queued}
+              title={
+                queued
+                  ? "Added to Summarize Later queue"
+                  : "Add to Summarize Later queue"
+              }
+              aria-pressed={queued}
+              style={{
+                fontSize: 14,
+                padding: "4px 8px",
+                lineHeight: 1,
+                color: queued ? "#7c5cff" : "#8b8b94",
+                background: queued ? "rgba(124,92,255,0.12)" : undefined,
+                border: queued ? "1px solid rgba(124,92,255,0.3)" : undefined,
+              }}
+            >
+              {queued ? "✓" : "🔖"}
+            </button>
+          )}
+          {!(isMusic) && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={summarize}
+              disabled={
+                pending ||
+                queuePending ||
+                video.transcript_status === "unavailable"
+              }
+              title={
+                video.transcript_status === "unavailable"
+                  ? "No captions available"
+                  : "Generate a 1-click summary"
+              }
+              style={{ fontSize: 12, padding: "6px 12px" }}
+            >
+              {stage === "transcribing"
+                ? "Fetching transcript…"
+                : stage === "summarizing"
+                  ? "Summarizing…"
+                  : hasSummary
+                    ? "Re-summarize"
+                    : "⚡ Summarize"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -438,14 +470,14 @@ export function VideoSummaryRow({
               </div>
               <div
                 style={{
-                  color: "#a0a0a8",
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                  maxHeight: 180,
+                  color: "#d4d4dc",
+                  fontSize: 15,
+                  lineHeight: 1.6,
+                  maxHeight: 220,
                   overflowY: "auto",
                   whiteSpace: "pre-wrap",
                   background: "#1a1a20",
-                  padding: "10px 12px",
+                  padding: "12px 14px",
                   borderRadius: 8,
                   border: "1px solid #2a2a33",
                 }}
@@ -478,6 +510,7 @@ export function VideoSummaryRow({
               videoId={video.video_id}
               chapters={chapters}
               communityPulse={communityPulse}
+              onSeek={handleSeek}
             />
           )}
         </div>
@@ -509,11 +542,13 @@ function SummaryBody({
   videoId,
   chapters,
   communityPulse,
+  onSeek,
 }: {
   summary: NonNullable<VideoWithSummary["summary"]>;
   videoId: string;
   chapters: Chapter[] | null;
   communityPulse: CommunityPulse | null;
+  onSeek: (seconds: number) => void;
 }) {
   return (
     <div>
@@ -618,9 +653,9 @@ function SummaryBody({
       )}
 
       {/* TAV-13: AI-generated chapter list. Rendered between the summary and the
-          chat area. Each chapter links to YouTube at the chapter's timestamp. */}
+          chat area. Each chapter seeks the embedded inline player. */}
       {chapters && chapters.length > 0 && (
-        <ChapterList chapters={chapters} videoId={videoId} />
+        <ChapterList chapters={chapters} onSeek={onSeek} />
       )}
 
       {/* TAV-20: Community Pulse — what the top commenters are saying. */}
@@ -634,13 +669,14 @@ function SummaryBody({
   );
 }
 
-/** TAV-13: Clickable chapter list. Each entry opens YouTube at that timestamp. */
+/** TAV-13: Clickable chapter list. Each entry seeks the embedded inline
+ *  player to that timestamp (opens the player if not already mounted). */
 function ChapterList({
   chapters,
-  videoId,
+  onSeek,
 }: {
   chapters: Chapter[];
-  videoId: string;
+  onSeek: (seconds: number) => void;
 }) {
   return (
     <div style={{ marginTop: 12, marginBottom: 4 }}>
@@ -657,35 +693,36 @@ function ChapterList({
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {chapters.map((ch, i) => (
-          <a
+          <button
             key={i}
-            href={youtubeVideoUrlAt(videoId, Math.floor(ch.startMs / 1000))}
-            target="_blank"
-            rel="noopener noreferrer"
+            type="button"
+            onClick={() => onSeek(Math.floor(ch.startMs / 1000))}
             style={{
               display: "flex",
               gap: 10,
               alignItems: "baseline",
               padding: "5px 8px",
               borderRadius: 6,
+              border: "1px solid transparent",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
               textDecoration: "none",
               color: "#c2c2cb",
               fontSize: 13,
               lineHeight: 1.4,
-              background: "transparent",
-              border: "1px solid transparent",
               transition: "background .12s ease, border-color .12s ease",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background =
+              (e.currentTarget as HTMLButtonElement).style.background =
                 "rgba(91,158,255,0.08)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor =
+              (e.currentTarget as HTMLButtonElement).style.borderColor =
                 "rgba(91,158,255,0.2)";
             }}
             onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background =
+              (e.currentTarget as HTMLButtonElement).style.background =
                 "transparent";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor =
+              (e.currentTarget as HTMLButtonElement).style.borderColor =
                 "transparent";
             }}
           >
@@ -701,7 +738,7 @@ function ChapterList({
               {formatMmSs(ch.startMs)}
             </span>
             <span style={{ minWidth: 0 }}>{ch.title}</span>
-          </a>
+          </button>
         ))}
       </div>
     </div>

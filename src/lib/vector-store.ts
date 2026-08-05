@@ -58,15 +58,16 @@ export async function indexVideo(videoId: string): Promise<IndexResult> {
     try {
       const now = Math.floor(Date.now() / 1000);
       await client.query('BEGIN');
-      await client.query('DELETE FROM transcript_chunks WHERE video_id = $1', [videoId]);
+      // TAV-30: only delete transcript chunks — summary chunks coexist now.
+      await client.query('DELETE FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'transcript\'', [videoId]);
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const vec = vectors[i];
         if (!vec) continue;
         const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
         await client.query(
-          `INSERT INTO transcript_chunks (id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          `INSERT INTO transcript_chunks (id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at, chunk_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'transcript')`,
           [newId(), videoId, i, chunk.text, chunk.start_ms, chunk.end_ms ?? null, blob, model, now],
         );
       }
@@ -85,22 +86,89 @@ export async function indexVideo(videoId: string): Promise<IndexResult> {
   }
 }
 
-/** Whether a video has been indexed (chunks exist in the store). */
+// ----- TAV-30: summary indexing ---------------------------------------------
+
+/**
+ * Index a video's summary as a single searchable chunk. The chunk text combines
+ * the TL;DR, key points, and topic tags so a searchAcross query can surface the
+ * video by what its summary says — without anyone having to chat with it first.
+ *
+ * Uses chunk_index = -1 and chunk_type = 'summary' to stay distinct from
+ * transcript chunks. start_ms/end_ms are 0/null — a summary isn't timestamped.
+ * Idempotent: replaces any prior summary chunk for this video before inserting.
+ */
+export async function indexSummary(videoId: string, summary: {
+  tldr: string;
+  key_points: string[];
+  topics: string[];
+}): Promise<IndexResult> {
+  try {
+    const text = buildSummaryChunkText(summary);
+    if (!text.trim()) {
+      return { ok: false, videoId, chunkCount: 0, embedModel: EMBEDDING_MODEL, error: 'Summary produced no indexable text.' };
+    }
+
+    const { vectors, model } = embed([text]);
+    const vec = vectors[0];
+    if (!vec) {
+      return { ok: false, videoId, chunkCount: 0, embedModel: EMBEDDING_MODEL, error: 'Embedding returned no vector.' };
+    }
+
+    const client = await getDb();
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+      await client.query('BEGIN');
+      await client.query('DELETE FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'summary\'', [videoId]);
+      await client.query(
+        `INSERT INTO transcript_chunks (id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at, chunk_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'summary')`,
+        [newId(), videoId, -1, text, 0, null, blob, model, now],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    return { ok: true, videoId, chunkCount: 1, embedModel: model };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, videoId, chunkCount: 0, embedModel: EMBEDDING_MODEL, error: msg };
+  }
+}
+
+/** Build a single indexable text blob from a summary's distilled fields. */
+function buildSummaryChunkText(summary: { tldr: string; key_points: string[]; topics: string[] }): string {
+  const parts: string[] = [];
+  if (summary.tldr.trim()) parts.push(summary.tldr.trim());
+  if (summary.key_points.length > 0) {
+    parts.push(summary.key_points.map(p => `• ${p}`).join('\n'));
+  }
+  if (summary.topics.length > 0) {
+    parts.push(`Topics: ${summary.topics.join(', ')}`);
+  }
+  return parts.join('\n\n');
+}
+
+/** Whether a video has been indexed (transcript chunks exist in the store). */
 export async function isIndexed(videoId: string): Promise<boolean> {
   const client = await getDb();
   try {
-    const { rows } = await client.query('SELECT 1 FROM transcript_chunks WHERE video_id = $1 LIMIT 1', [videoId]);
+    const { rows } = await client.query('SELECT 1 FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'transcript\' LIMIT 1', [videoId]);
     return rows.length > 0;
   } finally {
     client.release();
   }
 }
 
-/** Count indexed chunks for a video — useful for UI status. */
+/** Count indexed transcript chunks for a video — useful for UI status. */
 export async function chunkCount(videoId: string): Promise<number> {
   const client = await getDb();
   try {
-    const { rows } = await client.query('SELECT COUNT(*) as n FROM transcript_chunks WHERE video_id = $1', [videoId]);
+    const { rows } = await client.query('SELECT COUNT(*) as n FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'transcript\'', [videoId]);
     return Number(rows[0].n);
   } finally {
     client.release();
@@ -228,7 +296,7 @@ export async function searchAcross(
       where = 'WHERE v.channel_id = $1';
     }
     const { rows } = await client.query(
-      `SELECT tc.text, tc.start_ms, tc.end_ms, tc.embedding,
+      `SELECT tc.text, tc.start_ms, tc.end_ms, tc.embedding, tc.chunk_type,
               v.video_id, v.title AS video_title, v.channel_id,
               c.title AS channel_title
        FROM transcript_chunks tc
@@ -248,6 +316,7 @@ export async function searchAcross(
       start_ms: number;
       end_ms: number | null;
       embedding: Buffer;
+      chunk_type: string;
       video_id: string;
       video_title: string;
       channel_id: string;
@@ -264,6 +333,7 @@ export async function searchAcross(
         startMs: row.start_ms,
         endMs: row.end_ms,
         score,
+        chunkType: row.chunk_type === 'summary' ? 'summary' : 'transcript',
       };
     });
 

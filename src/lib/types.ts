@@ -154,6 +154,10 @@ export interface VideoWithSummary extends VideoRow {
   chapters: Chapter[] | null;
   /** TAV-20: Community Pulse — top comments + LLM summary, or null when not yet fetched. */
   community_pulse: CommunityPulse | null;
+  /** TAV-41: true if this video is in the user's `video_likes` table. Hydrated
+   * server-side by the list queries so the row doesn't need a per-mount
+   * `getLikeStateAction` round-trip (was causing ~1 server call per row). */
+  liked: boolean;
 }
 
 // ----- TAV-20: Community Pulse — top comments + summary ----------------------
@@ -228,6 +232,8 @@ export interface TranscriptSearchResult {
   startMs: number;
   endMs: number | null;
   score: number;
+  /** TAV-30: 'transcript' for a transcript-segment hit, 'summary' for a summary hit. */
+  chunkType: 'transcript' | 'summary';
 }
 
 // ----- TAV-25: Channel back-catalog search ------------------------------------

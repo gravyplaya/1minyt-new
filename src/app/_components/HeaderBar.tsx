@@ -31,7 +31,7 @@ export function HeaderBar({
       <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#e7e7ea', textDecoration: 'none' }}>
         <Logo />
         <strong style={{ fontSize: 16, letterSpacing: '-0.01em' }}>1minyt</strong>
-        <span className="header-subtitle" style={{ color: '#5a5a64', fontSize: 13, marginLeft: 4 }}>subscriptions</span>
+        <span className="header-subtitle" style={{ color: '#5a5a64', fontSize: 13, marginLeft: 4 }}>beta</span>
       </Link>
       <div className="header-meta" style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, color: '#8b8b94' }}>
         {connected && (

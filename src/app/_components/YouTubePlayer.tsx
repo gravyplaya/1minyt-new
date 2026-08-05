@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { TranscriptSegment } from '@/lib/types';
+import { recordVideoPlayAction } from '@/app/actions';
 
 // ----- YT IFrame API minimal types (avoid pulling in @types/youtube) ---------
 
@@ -144,6 +145,9 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  // TAV-41: track the last position we recorded as a ref (not state) so the
+  // 250 ms position poller below doesn't tear down + rebuild every ~30 s.
+  const lastRecordedPlayRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
 
@@ -249,6 +253,10 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
       try {
         const t = p.getCurrentTime() || 0;
         setCurrentTime(t);
+        if (t - lastRecordedPlayRef.current >= 30) {
+          lastRecordedPlayRef.current = t;
+          void recordVideoPlayAction(videoId, t, duration > 0 && t / duration >= 0.9);
+        }
         if (segments && segments.length > 0) {
           // Binary search for the last segment whose start_ms <= current time.
           const ms = t * 1000;
@@ -269,7 +277,7 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
       } catch { /* player may be briefly unavailable during teardown */ }
     }, 250);
     return () => window.clearInterval(id);
-  }, [ready, playing, segments]);
+  }, [ready, playing, segments, videoId, duration]);
 
   const togglePlay = () => {
     const p = playerRef.current;
@@ -345,18 +353,18 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
         <div
           key={activeIndex}
           style={{
-            fontSize: 12,
-            lineHeight: 1.5,
-            color: '#d4d4dc',
-            background: 'rgba(91,158,255,0.08)',
-            border: '1px solid rgba(91,158,255,0.25)',
+            fontSize: 15,
+            lineHeight: 1.6,
+            color: "#e7e7ea",
+            background: "rgba(91,158,255,0.08)",
+            border: "1px solid rgba(91,158,255,0.25)",
             borderRadius: 8,
-            padding: '8px 12px',
-            maxHeight: 96,
-            overflowY: 'auto',
+            padding: "10px 14px",
+            maxHeight: 120,
+            overflowY: "auto",
           }}
         >
-          <span style={{ color: '#7db5ff', fontFamily: 'monospace', fontSize: 11, marginRight: 8 }}>
+          <span style={{ color: "#7db5ff", fontFamily: "monospace", fontSize: 13, marginRight: 8 }}>
             {fmtTime(segments[activeIndex].start_ms / 1000)}
           </span>
           {segments[activeIndex].text}

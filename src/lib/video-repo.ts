@@ -4,7 +4,7 @@
  * All functions are async — backed by PostgreSQL.
  */
 
-import { getDb } from './db';
+import { getDb, query, withTransaction } from './db';
 import { newId } from './id';
 import type { Chapter, ChatMessage, CommunityPulse, FollowUp, MostReferencedVideo, ReferenceType, SummaryRow, TranscriptSource, TranscriptStatus, VideoComment, VideoRow, VideoWithSummary, VideoReferenceWithTarget } from './types';
 
@@ -191,11 +191,20 @@ export async function listVideosByChannel(channelId: string, limit = 30): Promis
       });
     }
 
+    // TAV-41: hydrate like state for all videos in one query so the client
+    // rows don't each fire a getLikeStateAction round-trip on mount.
+    const likedResult = await client.query<{ video_id: string }>(
+      `SELECT video_id FROM video_likes WHERE video_id IN (${placeholders})`,
+      videoIds,
+    );
+    const likedSet = new Set(likedResult.rows.map(r => r.video_id));
+
     return rows.map(row => ({
       ...row,
       summary: summaryMap.get(row.video_id) ?? null,
       chapters: chapterMap.get(row.video_id) ?? null,
       community_pulse: pulseMap.get(row.video_id) ?? null,
+      liked: likedSet.has(row.video_id),
     }));
   } finally {
     client.release();
@@ -340,11 +349,212 @@ export function currentSummaryModel(): string {
 
 // ----- TAV-12: bookmarked summaries ------------------------------------------
 
+// TAV-41: like toggle. Not wrapped in a transaction because the only race is
+// a double-click on the heart, which leaves liked=true regardless — harmless
+// for a single-user app and the action returns the post-toggle state.
+export async function toggleVideoLike(videoId: string): Promise<{ liked: boolean; channelId: string | null }> {
+  const client = await getDb();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const existing = await client.query<{ video_id: string }>(
+      'SELECT video_id FROM video_likes WHERE video_id = $1', [videoId],
+    );
+    if (existing.rowCount) {
+      await client.query('DELETE FROM video_likes WHERE video_id = $1', [videoId]);
+      const channel = await client.query<{ channel_id: string }>(
+        'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+      );
+      return { liked: false, channelId: channel.rows[0]?.channel_id ?? null };
+    }
+    const channel = await client.query<{ channel_id: string }>(
+      'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+    );
+    await client.query('INSERT INTO video_likes (video_id, liked_at) VALUES ($1, $2) ON CONFLICT (video_id) DO NOTHING', [videoId, now]);
+    return { liked: true, channelId: channel.rows[0]?.channel_id ?? null };
+  } finally { client.release(); }
+}
+
+export async function recordVideoPlay(videoId: string, progressSeconds = 0, completed = false): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await query(
+    `INSERT INTO video_play_history (video_id, first_played_at, last_played_at, play_count, last_progress_seconds, completed)
+     VALUES ($1, $2, $2, 1, $3, $4)
+     ON CONFLICT (video_id) DO UPDATE SET last_played_at = $2, play_count = video_play_history.play_count + 1,
+       last_progress_seconds = EXCLUDED.last_progress_seconds,
+       completed = GREATEST(video_play_history.completed, EXCLUDED.completed)`,
+    [videoId, now, Math.max(0, Math.floor(progressSeconds)), completed ? 1 : 0],
+  );
+}
+
 /**
- * Flip the bookmark flag on a video's latest summary. Returns the new state
- * (1 = bookmarked, 0 = not) or null if the video has no summary to bookmark.
+ * TAV-41 sync helper: persist a batch of liked videos fetched from
+ * `videos.list?myRating=like`. The `videos` table requires a `channel_id` FK,
+ * so when the channel isn't already cached (a user can like a video from a
+ * channel they don't subscribe to) we insert a minimal `channels` row using
+ * the snippet's `channelId` + `channelTitle`. Any subsequent subscription
+ * sync will overwrite it with full metadata.
+ *
+ * Runs the whole batch in a single transaction on one pooled client. Doing
+ * it per-record would acquire+release a client 100× for a typical sync, which
+ * (a) overwhelms the pg pool's `max` budget under concurrent sync requests
+ * and (b) makes a 100-like sync take ~10s of sequential round-trips — past
+ * Netlify's synchronous-function timeout. The transaction cuts that to one
+ * acquire and ~3 sequential round-trips per batch.
+ *
+ * The `video_likes.liked_at` column is preserved on conflict — re-syncing
+ * must not move the timestamp, since the activity table mirrors the user's
+ * "when did they first like this" history, and YouTube doesn't expose an
+ * original likedAt value on the API row.
  */
-export async function toggleBookmark(videoId: string): Promise<0 | 1 | null> {
+export async function recordLikedVideos(likes: ReadonlyArray<{
+  video_id: string;
+  channel_id: string | null;
+  channel_title: string | null;
+  title: string;
+  description: string | null;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  published_at: number | null;
+  liked_at: number;
+}>): Promise<{ inserted: number; skipped: number }> {
+  if (likes.length === 0) return { inserted: 0, skipped: 0 };
+  let inserted = 0;
+  let skipped = 0;
+  await withTransaction(async (client) => {
+    const now = Math.floor(Date.now() / 1000);
+    // De-dup by video_id inside the batch so the same video appearing twice
+    // in the API response (rare but possible during pagination races) doesn't
+    // fail the upsert with a unique-violation inside the transaction.
+    const seen = new Set<string>();
+    for (const input of likes) {
+      if (seen.has(input.video_id)) { skipped++; continue; }
+      seen.add(input.video_id);
+      if (input.channel_id) {
+        await client.query(
+          `INSERT INTO channels (channel_id, title, synced_at, created_at, updated_at)
+           VALUES ($1, $2, $3, $3, $3)
+           ON CONFLICT (channel_id) DO NOTHING`,
+          [input.channel_id, input.channel_title ?? input.channel_id, now],
+        );
+      }
+      const channelId = input.channel_id ?? 'unknown';
+      await client.query(
+        `INSERT INTO videos (
+          video_id, channel_id, title, description, thumbnail_url,
+          duration_seconds, published_at,
+          transcript_status,
+          view_count, like_count, comment_count, favorite_count,
+          tags, category_id, is_live, live_streaming_details,
+          created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6, $7,
+          'pending',
+          NULL, NULL, NULL, NULL,
+          NULL, NULL, 0, NULL,
+          $8, $8
+        )
+        ON CONFLICT (video_id) DO UPDATE SET
+          title = COALESCE(EXCLUDED.title, videos.title),
+          description = COALESCE(EXCLUDED.description, videos.description),
+          thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, videos.thumbnail_url),
+          duration_seconds = COALESCE(EXCLUDED.duration_seconds, videos.duration_seconds),
+          published_at = COALESCE(EXCLUDED.published_at, videos.published_at),
+          channel_id = CASE WHEN videos.channel_id = 'unknown' THEN EXCLUDED.channel_id ELSE videos.channel_id END,
+          updated_at = $8`,
+        [
+          input.video_id, channelId, input.title, input.description, input.thumbnail_url,
+          input.duration_seconds, input.published_at,
+          now,
+        ],
+      );
+      const liked = await client.query(
+        `INSERT INTO video_likes (video_id, liked_at) VALUES ($1, $2)
+         ON CONFLICT (video_id) DO NOTHING
+         RETURNING video_id`,
+        [input.video_id, input.liked_at],
+      );
+      if (liked.rowCount && liked.rowCount > 0) inserted++; else skipped++;
+    }
+  });
+  return { inserted, skipped };
+}
+
+
+export async function listLikedVideos(limit = 100): Promise<VideoWithSummary[]> {
+  return listVideosFromActivity('video_likes', 'liked_at', limit);
+}
+
+export async function listPlayHistory(limit = 100): Promise<VideoWithSummary[]> {
+  return listVideosFromActivity('video_play_history', 'last_played_at', limit);
+}
+
+async function listVideosFromActivity(table: 'video_likes' | 'video_play_history', timestampColumn: string, limit: number): Promise<VideoWithSummary[]> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query<VideoRow>(
+      `SELECT v.* FROM videos v JOIN ${table} a ON a.video_id = v.video_id ORDER BY a.${timestampColumn} DESC LIMIT $1`, [limit],
+    );
+    if (!rows.length) return [];
+    const ids = rows.map(v => v.video_id);
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    const summaries = await client.query<SummaryDbRow>(`SELECT DISTINCT ON (video_id) * FROM summaries WHERE video_id IN (${placeholders}) ORDER BY video_id, created_at DESC`, ids);
+    const summaryMap = new Map(summaries.rows.map(row => [row.video_id, hydrateSummary(row)]));
+
+    // Hydrate chapters for all videos in one query (TAV-13).
+    const chapterResult = await client.query<{ video_id: string; chapters: string }>(
+      `SELECT video_id, chapters FROM video_chapters WHERE video_id IN (${placeholders})`,
+      ids,
+    );
+    const chapterMap = new Map<string, Chapter[]>();
+    for (const row of chapterResult.rows) {
+      try {
+        chapterMap.set(row.video_id, JSON.parse(row.chapters) as Chapter[]);
+      } catch { /* keep default */ }
+    }
+
+    // TAV-20: hydrate community pulse (comments + summary) for all videos.
+    const pulseResult = await client.query<{
+      video_id: string;
+      comments: string;
+      fetched_at: number;
+      summary: string | null;
+      summary_model: string | null;
+    }>(`SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE video_id IN (${placeholders})`, ids);
+    const pulseMap = new Map<string, CommunityPulse>();
+    for (const row of pulseResult.rows) {
+      let comments: VideoComment[] = [];
+      try { comments = JSON.parse(row.comments) as VideoComment[]; } catch { /* keep default */ }
+      pulseMap.set(row.video_id, {
+        video_id: row.video_id,
+        comments,
+        summary: row.summary,
+        summary_model: row.summary_model,
+        fetched_at: row.fetched_at,
+      });
+    }
+
+    // TAV-41: hydrate like state in one query. For `video_likes` every row is
+    // liked by definition, but this single query keeps the shape uniform and
+    // costs nothing relative to the per-row round-trips it replaces.
+    const likedResult = await client.query<{ video_id: string }>(
+      `SELECT video_id FROM video_likes WHERE video_id IN (${placeholders})`,
+      ids,
+    );
+    const likedSet = new Set(likedResult.rows.map(r => r.video_id));
+
+    return rows.map(video => ({
+      ...video,
+      summary: summaryMap.get(video.video_id) ?? null,
+      chapters: chapterMap.get(video.video_id) ?? null,
+      community_pulse: pulseMap.get(video.video_id) ?? null,
+      liked: likedSet.has(video.video_id),
+    }));
+  } finally { client.release(); }
+}
+
+/** Flip the bookmark flag on a video's latest summary. */
+export async function toggleBookmark(videoId: string): Promise<{ bookmarked: 0 | 1 | null; channelId: string | null }> {
   const client = await getDb();
   try {
     // Find the latest summary for this video.
@@ -352,11 +562,19 @@ export async function toggleBookmark(videoId: string): Promise<0 | 1 | null> {
       'SELECT id, bookmarked FROM summaries WHERE video_id = $1 ORDER BY created_at DESC LIMIT 1',
       [videoId],
     );
-    if (rows.length === 0) return null;
+    if (rows.length === 0) {
+      const channel = await client.query<{ channel_id: string }>(
+        'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+      );
+      return { bookmarked: null, channelId: channel.rows[0]?.channel_id ?? null };
+    }
     const current = rows[0].bookmarked === 1 ? 1 : 0;
     const next: 0 | 1 = current === 1 ? 0 : 1;
     await client.query('UPDATE summaries SET bookmarked = $1 WHERE id = $2', [next, rows[0].id]);
-    return next;
+    const channel = await client.query<{ channel_id: string }>(
+      'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+    );
+    return { bookmarked: next, channelId: channel.rows[0]?.channel_id ?? null };
   } finally {
     client.release();
   }

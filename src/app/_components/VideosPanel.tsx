@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type { VideoWithSummary } from '@/lib/types';
+import type { MusicFlag, VideoWithSummary } from '@/lib/types';
 import { fetchTranscriptAction, getUnsummarizedVideosAction, refreshChannelVideosAction, summarizeVideoAction } from '@/app/actions';
 import { VideoSummaryRow } from './VideoSummaryRow';
 
@@ -20,10 +20,12 @@ export function VideosPanel({
   channelId,
   initialVideos,
   connected,
+  musicFlag,
 }: {
   channelId: string;
   initialVideos: VideoWithSummary[];
   connected: boolean;
+  musicFlag: MusicFlag;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -178,7 +180,7 @@ export function VideosPanel({
           </span>
         </h2>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {connected && unsummarizedCount > 0 && !batch.running && (
+          {connected && musicFlag !== 1 && unsummarizedCount > 0 && !batch.running && (
             <button
               type="button"
               className="btn btn-primary"
@@ -334,7 +336,7 @@ export function VideosPanel({
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {visibleVideos.map(v => (
-            <VideoSummaryRow key={v.video_id} video={v} channelId={channelId} />
+            <VideoSummaryRow key={v.video_id} video={v} channelId={channelId} musicFlag={musicFlag} />
           ))}
         </div>
       )}

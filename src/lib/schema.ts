@@ -195,6 +195,12 @@ export const SCHEMA_STATEMENTS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_chunks_video ON transcript_chunks(video_id, chunk_index)`,
 
+  // TAV-30: summary indexing — distinguish summary chunks from transcript chunks
+  // so both can coexist in one table and be searched via searchAcross. Backfilled
+  // to 'transcript' for all pre-existing rows; new transcript chunks default to it.
+  `ALTER TABLE transcript_chunks ADD COLUMN IF NOT EXISTS chunk_type TEXT NOT NULL DEFAULT 'transcript'`,
+  `CREATE INDEX IF NOT EXISTS idx_chunks_video_type ON transcript_chunks(video_id, chunk_type)`,
+
   `CREATE TABLE IF NOT EXISTS chat_messages (
     id         TEXT PRIMARY KEY,
     video_id   TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
@@ -371,6 +377,26 @@ export const SCHEMA_STATEMENTS: string[] = [
     options     TEXT NOT NULL DEFAULT '{}',
     updated_at  INTEGER NOT NULL
   )`,
+  // ----- TAV-41: Likes + play history ----------------------------------------
+  `CREATE TABLE IF NOT EXISTS video_likes (
+    video_id   TEXT PRIMARY KEY REFERENCES videos(video_id) ON DELETE CASCADE,
+    liked_at   INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_video_likes_liked_at ON video_likes(liked_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS video_play_history (
+    video_id       TEXT PRIMARY KEY REFERENCES videos(video_id) ON DELETE CASCADE,
+    first_played_at INTEGER NOT NULL,
+    last_played_at  INTEGER NOT NULL,
+    play_count     INTEGER NOT NULL DEFAULT 1,
+    -- TAV-41: the user's most recent playback position, in seconds. Updated
+    -- unconditionally (NOT GREATEST) so a rewind + rewatch keeps Continue
+    -- Watching accurate. The high-water mark is "completed" below.
+    last_progress_seconds INTEGER NOT NULL DEFAULT 0,
+    -- TAV-41: 1 once the user has ever crossed ~90 % of the video. Monotonic
+    -- (latch-once) — re-watching an already-completed video does not reset it.
+    completed      INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_video_history_last_played ON video_play_history(last_played_at DESC)`,
 
 ];
 

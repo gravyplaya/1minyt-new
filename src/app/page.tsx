@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {
   countChannels,
   CHANNEL_PAGE_SIZE,
@@ -6,13 +5,9 @@ import {
 } from "@/lib/queries";
 import { listFolders, listTags, latestSyncRun } from "@/lib/repo";
 import { isConnected, getUserProfile } from "@/lib/tokens";
-import { countInboxNew } from "@/lib/inbox";
-import { countQueued } from "@/lib/summarize-queue";
-import { countSummarizedVideos } from "@/lib/video-repo";
-import { AddFolderForm, AddTagForm } from "./_components/AddFolderTagForms";
 import { HeaderBar } from "./_components/HeaderBar";
 import { ChannelList } from "./_components/ChannelList";
-import { ResponsiveSidebar } from "./_components/ResponsiveSidebar";
+import { GlobalSidebar } from "./_components/GlobalSidebar";
 
 interface PageProps {
   searchParams: Promise<{
@@ -37,9 +32,6 @@ export default async function HomePage({ searchParams }: PageProps) {
     folders,
     tags,
     counts,
-    inboxCount,
-    queuedCount,
-    summarizedCount,
   ] = await Promise.all([
     isConnected(),
     getUserProfile(),
@@ -47,9 +39,6 @@ export default async function HomePage({ searchParams }: PageProps) {
     listFolders(),
     listTags(),
     countChannels(),
-    countInboxNew(),
-    countQueued(),
-    countSummarizedVideos(),
   ]);
 
   const activeFolder = params.folder ?? null;
@@ -109,127 +98,13 @@ export default async function HomePage({ searchParams }: PageProps) {
         style={{ display: "grid", gridTemplateColumns: "280px 1fr", flex: 1 }}
       >
         {/* Sidebar */}
-        <ResponsiveSidebar>
-          <section>
-            <h3 style={sidebarHeading}>Library</h3>
-            <SidebarLink href="/inbox" active={false}>
-              <span>📥</span> Inbox{" "}
-              {inboxCount > 0 && <Badge>{inboxCount}</Badge>}
-            </SidebarLink>
-            <SidebarLink href="/summarized" active={false}>
-              <span>✦</span> Summarized{" "}
-              {summarizedCount > 0 && <Badge>{summarizedCount}</Badge>}
-            </SidebarLink>
-            <SidebarLink href="/summarize-later" active={false}>
-              <span>🔖</span> Summarize Later{" "}
-              {queuedCount > 0 && <Badge>{queuedCount}</Badge>}
-            </SidebarLink>
-            <SidebarLink href="/search" active={false}>
-              <span>🔍</span> Search
-            </SidebarLink>
-            <SidebarLink href="/saved" active={false}>
-              <span>★</span> Saved
-            </SidebarLink>
-            <SidebarLink href="/digests" active={false}>
-              <span>📋</span> Digests
-            </SidebarLink>
-            <SidebarLink href="/metrics" active={false}>
-              <span>📊</span> Metrics
-            </SidebarLink>
-            <SidebarLink href="/settings" active={false}>
-              <span>⚙</span> Settings
-            </SidebarLink>
-            <SidebarLink
-              href={urlWith({ folder: null, tag: null, showMusic: null })}
-              active={!activeFolder && !activeTag && !showMusic}
-            >
-              <span>📺</span> All channels <Badge>{counts.total}</Badge>
-            </SidebarLink>
-            <SidebarLink
-              href={urlWith({ folder: "none", tag: null, showMusic: null })}
-              active={activeFolder === "none"}
-            >
-              <span>🗂</span> Unfiled <Badge>{counts.unfiled}</Badge>
-            </SidebarLink>
-            <SidebarLink
-              href={urlWith({ showMusic: "1", folder: null, tag: null })}
-              active={showMusic}
-            >
-              <span>🎵</span> Music <Badge>{counts.music}</Badge>
-            </SidebarLink>
-            <SidebarLink
-              href={urlWith({
-                showHidden: showHidden ? null : "1",
-                folder: null,
-                tag: null,
-              })}
-              active={showHidden}
-            >
-              <span>🙈</span> Hidden <Badge>{counts.hidden}</Badge>
-            </SidebarLink>
-          </section>
-
-          <section>
-            <h3 style={sidebarHeading}>Folders</h3>
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {folders.map((f: (typeof folders)[number]) => (
-                <SidebarLink
-                  key={f.id}
-                  href={urlWith({
-                    folder: activeFolder === f.id ? null : f.id,
-                    tag: null,
-                  })}
-                  active={activeFolder === f.id}
-                >
-                  <span
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      background: f.color ?? "#5b9eff",
-                      display: "inline-block",
-                    }}
-                  />
-                  <span style={{ flex: 1 }}>{f.name}</span>
-                </SidebarLink>
-              ))}
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <AddFolderForm />
-            </div>
-          </section>
-
-          <section>
-            <h3 style={sidebarHeading}>Tags</h3>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {tags.length === 0 && (
-                <span style={{ color: "#5a5a64", fontSize: 12 }}>
-                  no tags yet
-                </span>
-              )}
-              {tags.map((t: (typeof tags)[number]) => (
-                <Link
-                  key={t.id}
-                  href={urlWith({
-                    tag: activeTag === t.id ? null : t.id,
-                    folder: null,
-                  })}
-                  className="chip"
-                  style={{
-                    background: activeTag === t.id ? "#5b9eff" : "#1f1f26",
-                    color: activeTag === t.id ? "#0a0a0c" : "#c2c2cb",
-                    borderColor: activeTag === t.id ? "#5b9eff" : "#2a2a33",
-                  }}
-                >
-                  #{t.name}
-                </Link>
-              ))}
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <AddTagForm />
-            </div>
-          </section>
-        </ResponsiveSidebar>
+        <GlobalSidebar
+          active="home"
+          activeFolder={activeFolder}
+          activeTag={activeTag}
+          showMusic={showMusic}
+          showHidden={showHidden}
+        />
 
         {/* Main */}
         <main
@@ -258,52 +133,6 @@ export default async function HomePage({ searchParams }: PageProps) {
       </div>
       )}
     </div>
-  );
-}
-
-const sidebarHeading: React.CSSProperties = {
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  fontSize: 11,
-  color: "#8b8b94",
-  marginBottom: 8,
-  fontWeight: 600,
-};
-
-function SidebarLink({
-  href,
-  active,
-  children,
-}: {
-  href: string;
-  active: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 8px",
-        borderRadius: 6,
-        fontSize: 13,
-        color: active ? "#fff" : "#c2c2cb",
-        background: active ? "#1f1f26" : "transparent",
-        textDecoration: "none",
-      }}
-    >
-      {children}
-    </Link>
-  );
-}
-
-function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <span style={{ marginLeft: "auto", fontSize: 11, color: "#8b8b94" }}>
-      {children}
-    </span>
   );
 }
 

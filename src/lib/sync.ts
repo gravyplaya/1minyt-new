@@ -6,10 +6,11 @@
  * the rows that actually changed.
  */
 
-import { fetchAllSubscriptions, fetchChannels } from './youtube';
+import { fetchAllSubscriptions, fetchChannels, fetchLikedVideos } from './youtube';
 import { getValidAccessToken } from './tokens';
 import { recordSyncFinish, recordSyncStart, upsertChannel } from './repo';
 import { classifyMusic } from './music-classifier';
+import { recordLikedVideos } from './video-repo';
 import type { ChannelRow } from './types';
 import type { youtube_v3 } from 'googleapis';
 
@@ -17,12 +18,16 @@ export interface SyncResult {
   seen: number;
   new: number;
   updated: number;
+  /** Total liked videos pulled from YouTube during this sync. */
+  likesSynced: number;
+  /** New `video_likes` rows actually inserted (re-synced videos are skipped). */
+  likesInserted: number;
   errors: string[];
 }
 
 export async function syncSubscriptions(): Promise<SyncResult> {
   const runId = await recordSyncStart();
-  const result: SyncResult = { seen: 0, new: 0, updated: 0, errors: [] };
+  const result: SyncResult = { seen: 0, new: 0, updated: 0, likesSynced: 0, likesInserted: 0, errors: [] };
   try {
     const accessToken = await getValidAccessToken();
     const subs = await fetchAllSubscriptions(accessToken);
@@ -75,6 +80,38 @@ export async function syncSubscriptions(): Promise<SyncResult> {
 
       const { created } = await upsertChannel(row);
       if (created) result.new += 1; else result.updated += 1;
+    }
+
+    // TAV-41: also pull the user's liked videos. Liking is independent of
+    // subscribing — a user can like a video from a channel they don't
+    // subscribe to. recordLikedVideos runs the whole batch in a single
+    // transaction so we don't acquire/release the pg pool once per row.
+    // Failures here are non-fatal: a quota blip on this endpoint shouldn't
+    // invalidate the subscription sync we already completed.
+    try {
+      const likes = await fetchLikedVideos(accessToken, 100);
+      if (likes.length > 0) {
+        const likedAt = Math.floor(Date.now() / 1000);
+        const { inserted, skipped } = await recordLikedVideos(
+          likes.map(v => ({
+            video_id: v.video_id,
+            channel_id: v.channel_id,
+            channel_title: v.channel_title,
+            title: v.title,
+            description: v.description,
+            thumbnail_url: v.thumbnail_url,
+            duration_seconds: v.duration_seconds,
+            published_at: v.published_at,
+            liked_at: likedAt,
+          })),
+        );
+        result.likesSynced = likes.length;
+        result.likesInserted = inserted;
+        // `skipped` is just re-syncs of already-known likes — not an error.
+        void skipped;
+      }
+    } catch (err) {
+      result.errors.push(`Liked-videos sync: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     await recordSyncFinish(runId, { status: 'success', seen: result.seen, new: result.new, updated: result.updated });

@@ -3,7 +3,9 @@ import { queryChannelsFromParams, PAGE_SIZE_OPTIONS } from '@/lib/queries';
 import type { FolderRow, TagRow } from '@/lib/types';
 import { ChannelRowItem } from './ChannelRowItem';
 import { ChannelToolbar } from './ChannelToolbar';
+import { FolderActions } from './FolderActions';
 import { PageSizeSelect } from './PageSizeSelect';
+import { TagActions } from './TagActions';
 
 interface Props {
   search: string;
@@ -77,10 +79,18 @@ export async function ChannelList({ search, folderId, tagId, showMusic, showHidd
           <span>{total === 1 ? 'channel' : 'channels'}</span>
           {search && <span>matching &ldquo;{search}&rdquo;</span>}
           {folderId && folderId !== 'none' && folderById.get(folderId) && (
-            <span>in <span className="chip" style={{ background: folderById.get(folderId)!.color ?? undefined, color: '#0a0a0c', borderColor: 'transparent' }}>{folderById.get(folderId)!.name}</span></span>
+            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              in <span className="chip" style={{ background: folderById.get(folderId)!.color ?? undefined, color: '#0a0a0c', borderColor: 'transparent' }}>{folderById.get(folderId)!.name}</span>
+              <FolderActions folderId={folderId} folderName={folderById.get(folderId)!.name} />
+            </span>
           )}
           {folderId === 'none' && <span>unfiled</span>}
-          {tagId && tagId !== 'none' && tagById.get(tagId) && <span>tagged <span className="chip">#{tagById.get(tagId)!.name}</span></span>}
+          {tagId && tagId !== 'none' && tagById.get(tagId) && (
+            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              tagged <span className="chip">#{tagById.get(tagId)!.name}</span>
+              <TagActions tagId={tagId} tagName={tagById.get(tagId)!.name} />
+            </span>
+          )}
           {showMusic && <span className="chip chip-music">🎵 music</span>}
           {showHidden && <span className="chip">hidden</span>}
         </div>

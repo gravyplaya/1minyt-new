@@ -30,9 +30,19 @@ function getPool(): Pool {
     // Using rejectUnauthorized: false for compatibility with Neon's certificate.
     ssl: connectionString.includes('sslmode=verify-full') ? undefined : { rejectUnauthorized: false },
     // Conservative pool size for serverless — each function instance gets its own pool.
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 10_000,
+    max: 5,
+    idleTimeoutMillis: 10_000,
+    // Allow Neon up to 15s to wake a sleeping connection on cold-start before
+    // giving up. The default 10s is too tight: Neon's compute can take ~12s to
+    // resume after a long idle period, and a slow acquire here would cascade
+    // into a route render timeout.
+    connectionTimeoutMillis: 15_000,
+    // Keep the TCP socket warm so we don't lose it to a middlebox idle reaper.
+    // Neon's pooler is happy with this; for other Postgres hosts it's a no-op.
+    keepAlive: true,
+    // Bound any single statement so a runaway query can't burn the whole
+    // 10-second synchronous-function budget Netlify gives us.
+    statement_timeout: 8_000,
   });
 
   pool.on('error', (err) => {
@@ -77,6 +87,19 @@ function ensureSchema(): Promise<void> {
       client.release();
     }
   })();
+
+  // Clear the cached promise on failure so the next request gets a clean
+  // retry. Without this, a single transient Neon blip on the first schema
+  // migration would poison every subsequent getDb() call on this function
+  // instance until it cold-starts again — which on serverless is rare.
+  global.__oneMinytSchemaReady.catch(() => {
+    if (global.__oneMinytSchemaReady) {
+      // Reassign to a rejected promise; the .catch above ensures we've already
+      // observed the failure, so reassigning to undefined lets the next call
+      // kick off a fresh attempt.
+      global.__oneMinytSchemaReady = undefined;
+    }
+  });
 
   return global.__oneMinytSchemaReady;
 }

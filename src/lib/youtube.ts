@@ -125,18 +125,46 @@ export async function fetchChannelUploads(
   const uploadsPlaylistId = chRes.data.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
   if (!uploadsPlaylistId) return [];
 
+  // The channel can have a `relatedPlaylists.uploads` value that the API
+  // accepts in `channels.list` but then refuses to resolve in
+  // `playlistItems.list` — typically because the channel was deleted,
+  // transferred, or set to private/closed after the subscription was
+  // recorded. The API returns HTTP 404 with reason `playlistNotFound`
+  // (and the same call sometimes also surfaces as `notFound` on a few
+  // legacy channel rows). We treat those as "no uploads" rather than
+  // letting the error propagate — the digest would otherwise surface it
+  // to the user for every channel with a stale uploads-playlist reference
+  // (TAV-15: Battlecat, Benson Crypto). The pattern mirrors
+  // `fetchTopComments`'s `commentsDisabled` handling: a documented
+  // "this resource isn't available" reason is a normal, recoverable
+  // state for a single-user subscription app, not a crash.
+  //
+  // Structured as gaxios's GaxiosError.response.data.error.errors[].reason.
+  // We can't import gaxios (transitive dep via googleapis), so reach it
+  // structurally — same shape `fetchTopComments` uses.
+  const isPlaylistGone = (err: unknown): boolean => {
+    const reasons = (err as { response?: { data?: { error?: { errors?: Array<{ reason?: string }> } } } })
+      ?.response?.data?.error?.errors ?? [];
+    return reasons.some(r => r.reason === 'playlistNotFound' || r.reason === 'notFound');
+  };
+
   const out: youtube_v3.Schema$PlaylistItem[] = [];
   let pageToken: string | undefined;
-  do {
-    const res = await yt.playlistItems.list({
-      part: ['snippet', 'contentDetails'],
-      playlistId: uploadsPlaylistId,
-      maxResults: Math.min(50, max - out.length),
-      pageToken,
-    });
-    out.push(...(res.data.items ?? []));
-    pageToken = res.data.nextPageToken ?? undefined;
-  } while (pageToken && out.length < max);
+  try {
+    do {
+      const res = await yt.playlistItems.list({
+        part: ['snippet', 'contentDetails'],
+        playlistId: uploadsPlaylistId,
+        maxResults: Math.min(50, max - out.length),
+        pageToken,
+      });
+      out.push(...(res.data.items ?? []));
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken && out.length < max);
+  } catch (err) {
+    if (isPlaylistGone(err)) return [];
+    throw err;
+  }
   return out.slice(0, max);
 }
 
@@ -625,6 +653,89 @@ export async function fetchPlaylistVideos(
 function pickPlaylistItemThumb(thumbs: youtube_v3.Schema$ThumbnailDetails | null | undefined): string | null {
   if (!thumbs) return null;
   return thumbs.medium?.url ?? thumbs.high?.url ?? thumbs.standard?.url ?? thumbs.default?.url ?? null;
+}
+
+// ----- TAV-41: Liked-videos sync ----------------------------------------------
+
+/**
+ * A single video the authenticated user has liked on YouTube, normalized from
+ * `videos.list?myRating=like`. We request a generous part so the row can be
+ * inserted into our `videos` table without a follow-up enrichment call.
+ *
+ * Quota cost: 1 unit per page (videos.list). The endpoint caps at 50 items per
+ * page, so a user with hundreds of likes pays a handful of units per sync.
+ */
+export interface LikedVideo {
+  video_id: string;
+  title: string;
+  description: string | null;
+  thumbnail_url: string | null;
+  channel_id: string | null;
+  channel_title: string | null;
+  /** Unix seconds, parsed from snippet.publishedAt. */
+  published_at: number | null;
+  duration_seconds: number | null;
+}
+
+/** Parse an ISO-8601 duration like "PT1H2M3S" to seconds; null when unparseable. */
+function parseIsoDurationToSeconds(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(iso);
+  if (!m) return null;
+  const h = parseInt(m[1] ?? '0', 10);
+  const min = parseInt(m[2] ?? '0', 10);
+  const s = parseInt(m[3] ?? '0', 10);
+  return h * 3600 + min * 60 + s;
+}
+
+/** Pick the best thumbnail from a `videos.list` snippet thumbnail set. */
+function pickVideoThumb(thumbs: youtube_v3.Schema$ThumbnailDetails | null | undefined): string | null {
+  if (!thumbs) return null;
+  return thumbs.medium?.url ?? thumbs.high?.url ?? thumbs.standard?.url ?? thumbs.default?.url ?? null;
+}
+
+/**
+ * Fetch the authenticated user's liked videos via `videos.list?myRating=like`.
+ * Walks nextPageToken internally so the caller gets a flat array up to `max`.
+ *
+ * YouTube returns liked videos newest-first by default, which is what the
+ * /likes page wants. The OAuth scope `youtube.readonly` (which the app already
+ * requests) is sufficient for this endpoint.
+ */
+export async function fetchLikedVideos(
+  accessToken: string,
+  max = 100,
+): Promise<LikedVideo[]> {
+  const yt = youtubeClientWithToken(accessToken);
+  const out: LikedVideo[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await yt.videos.list({
+      part: ['snippet', 'contentDetails'],
+      myRating: 'like',
+      maxResults: Math.min(50, max - out.length),
+      pageToken,
+    });
+    const items = res.data.items ?? [];
+    for (const item of items) {
+      const videoId = item.id;
+      if (!videoId) continue;
+      const snip = item.snippet;
+      out.push({
+        video_id: videoId,
+        title: snip?.title ?? '(untitled)',
+        description: snip?.description ?? null,
+        thumbnail_url: pickVideoThumb(snip?.thumbnails),
+        channel_id: snip?.channelId ?? null,
+        channel_title: snip?.channelTitle ?? null,
+        published_at: parseIsoToUnix(snip?.publishedAt ?? null),
+        duration_seconds: parseIsoDurationToSeconds(item.contentDetails?.duration),
+      });
+      if (out.length >= max) break;
+    }
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken && out.length < max);
+  return out.slice(0, max);
 }
 
 export { TOKEN_URL };

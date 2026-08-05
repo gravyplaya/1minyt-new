@@ -9,6 +9,7 @@ import {
   deleteFolder,
   deleteTag,
   renameFolder,
+  renameTag,
   setChannelFolders,
   setChannelHidden,
   setChannelMusicFlag,
@@ -18,15 +19,16 @@ import {
 import { syncSubscriptions } from '@/lib/sync';
 import { clearTokens } from '@/lib/tokens';
 import { syncChannelVideos } from '@/lib/video-sync';
-import { getVideo, listRecentUploadIds, listVideosByChannel, saveSummary, setTranscript, setTranscriptStatus, saveChatMessage, listChatMessages, toggleBookmark, saveChapters, upsertVideoComments, setCommentSummary, getCommunityPulse, upsertVideo, persistVideoReferences, getOutgoingReferences, getIncomingReferences, getMostReferencedVideos } from '@/lib/video-repo';
+import { getVideo, listRecentUploadIds, listVideosByChannel, saveSummary, setTranscript, setTranscriptStatus, saveChatMessage, listChatMessages, toggleBookmark, saveChapters, upsertVideoComments, setCommentSummary, getCommunityPulse, upsertVideo, persistVideoReferences, getOutgoingReferences, getIncomingReferences, getMostReferencedVideos, toggleVideoLike, recordVideoPlay } from '@/lib/video-repo';
 import { fetchTranscript } from '@/lib/transcript';
 import { isWhisperEnabled } from '@/lib/whisper';
 import { summarizeVideo, summarizeComments } from '@/lib/summarize';
 import { fetchTopComments, searchChannelVideos, fetchChannelPlaylists, fetchPlaylistVideos } from '@/lib/youtube';
 import { getValidAccessToken } from '@/lib/tokens';
 import { detectChapters } from '@/lib/chapters';
-import { indexVideo, isIndexed, chunkCount, searchAcross, getSegments } from '@/lib/vector-store';
+import { indexVideo, indexSummary, isIndexed, chunkCount, searchAcross, getSegments } from '@/lib/vector-store';
 import { chatWithVideo } from '@/lib/chat';
+import { friendlyError } from '@/lib/errors';
 import type { Chapter, ChatCitation, ChatMessage, ChannelCatalogHit, CommunityPulse, MostReferencedVideo, PlaylistRow, PlaylistSummary, PlaylistVideoRow, SummaryRow, TranscriptSegment, TranscriptSource, VideoWithSummary, TranscriptSearchResult, VideoReferenceWithTarget } from '@/lib/types';
 
 export async function triggerSyncAction() {
@@ -34,6 +36,8 @@ export async function triggerSyncAction() {
   revalidatePath('/');
   revalidatePath('/music');
   revalidatePath('/unfiled');
+  revalidatePath('/likes');
+  revalidatePath('/history');
   return result;
 }
 
@@ -86,6 +90,11 @@ export async function createTagAction(name: string, color?: string) {
   const t = await createTag(name, color);
   revalidatePath('/');
   return t;
+}
+
+export async function renameTagAction(id: string, name: string) {
+  await renameTag(id, name);
+  revalidatePath('/');
 }
 
 export async function deleteTagAction(id: string) {
@@ -159,8 +168,7 @@ export async function fetchTranscriptAction(videoId: string): Promise<Transcript
     await setTranscript(videoId, fetched.text, source);
     return { ok: true, videoId, transcript: fetched.text, source: fetched.source, transcriptSource: source };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, videoId, error: msg };
+    return { ok: false, videoId, error: friendlyError(err) };
   }
 }
 
@@ -242,12 +250,24 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
     // or LLM error all degrade to "no community pulse" rather than failing the run.
     const communityPulse = await runCommunityPulse(videoId, video.title, saved.tldr);
 
+    // TAV-30: index the summary so searchAcross can surface this video by what
+    // its summary says — without anyone having to chat with it first. Non-fatal:
+    // a failure here must not invalidate the summary.
+    try {
+      await indexSummary(videoId, {
+        tldr: saved.tldr,
+        key_points: saved.key_points,
+        topics: saved.topics,
+      });
+    } catch (err) {
+      console.error('Summary indexing failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+
     revalidatePath(`/c/${video.channel_id}`);
 
     return { ok: true, videoId, summary: saved, chapters, communityPulse };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, videoId, error: msg };
+    return { ok: false, videoId, error: friendlyError(err) };
   }
 }
 
@@ -344,8 +364,7 @@ export async function detectChaptersAction(videoId: string): Promise<ChaptersOut
 
     return { ok: true, videoId, chapters: result.chapters };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, videoId, error: msg };
+    return { ok: false, videoId, error: friendlyError(err) };
   }
 }
 
@@ -367,16 +386,30 @@ export interface BookmarkOutcome {
   error?: string;
 }
 
+export async function toggleVideoLikeAction(videoId: string): Promise<{ ok: boolean; liked: boolean; error?: string }> {
+  try {
+    const { liked, channelId } = await toggleVideoLike(videoId);
+    revalidatePath('/likes');
+    if (channelId) revalidatePath(`/c/${channelId}`);
+    return { ok: true, liked };
+  } catch (err) { return { ok: false, liked: false, error: err instanceof Error ? err.message : String(err) }; }
+}
+
+export async function recordVideoPlayAction(videoId: string, progressSeconds = 0, completed = false): Promise<{ ok: boolean; error?: string }> {
+  try { await recordVideoPlay(videoId, progressSeconds, completed); revalidatePath('/history'); return { ok: true }; }
+  catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+}
+
 export async function toggleBookmarkAction(videoId: string): Promise<BookmarkOutcome> {
   try {
-    const next = await toggleBookmark(videoId);
-    if (next === null) {
+    const { bookmarked, channelId } = await toggleBookmark(videoId);
+    if (bookmarked === null) {
       return { ok: false, videoId, bookmarked: null, error: 'No summary to bookmark yet.' };
     }
     // Revalidate the saved page and the channel page so both reflect the change.
     revalidatePath('/saved');
-    revalidatePath(`/c/${(await getVideo(videoId))?.channel_id ?? ''}`);
-    return { ok: true, videoId, bookmarked: next };
+    if (channelId) revalidatePath(`/c/${channelId}`);
+    return { ok: true, videoId, bookmarked };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, videoId, bookmarked: null, error: msg };
@@ -467,8 +500,7 @@ export async function chatWithVideoAction(videoId: string, question: string): Pr
       messages,
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, videoId, error: msg };
+    return { ok: false, videoId, error: friendlyError(err) };
   }
 }
 

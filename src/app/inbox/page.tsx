@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { HeaderBar } from '../_components/HeaderBar';
+import { AppShell } from '../_components/AppShell';
 import { InboxFeed } from '../_components/InboxFeed';
 import { FilterSelect } from '../_components/FilterSelect';
 import { listInboxVideos, listInboxCategories, listInboxChannels, INBOX_PAGE_SIZE } from '@/lib/inbox';
@@ -95,127 +95,120 @@ export default async function InboxPage({ searchParams }: PageProps) {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} profile={profile} />
-      <main style={{ padding: '24px 32px', maxWidth: 900, margin: '0 auto', width: '100%' }}>
-        <div style={{ marginBottom: 14 }}>
-          <Link href="/" style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to subscriptions</Link>
-        </div>
+    <AppShell active="inbox" connected={connected} profile={profile} mainStyle={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📥 Inbox</h1>
+        <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>
+          A unified feed of new videos across all your subscriptions, ranked by relevance (engagement × recency × channel interaction). Triage with dismiss, save, or summarize.
+        </p>
+      </div>
 
-        <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📥 Inbox</h1>
-          <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>
-            A unified feed of new videos across all your subscriptions, ranked by relevance (engagement × recency × channel interaction). Triage with dismiss, save, or summarize.
-          </p>
-        </div>
+      {/* Scope toggle */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <Link
+          href={urlWith({ scope: 'new' })}
+          className="chip"
+          style={{
+            background: scope === 'new' ? '#5b9eff' : '#1f1f26',
+            color: scope === 'new' ? '#0a0a0c' : '#c2c2cb',
+            borderColor: scope === 'new' ? '#5b9eff' : '#2a2a33',
+            padding: '4px 12px',
+            fontSize: 12,
+          }}
+        >
+          New {scope === 'new' && result.total > 0 ? `(${result.total})` : ''}
+        </Link>
+        <Link
+          href={urlWith({ scope: 'saved' })}
+          className="chip"
+          style={{
+            background: scope === 'saved' ? '#f5c542' : '#1f1f26',
+            color: scope === 'saved' ? '#0a0a0c' : '#c2c2cb',
+            borderColor: scope === 'saved' ? '#f5c542' : '#2a2a33',
+            padding: '4px 12px',
+            fontSize: 12,
+          }}
+        >
+          ★ Saved
+        </Link>
+      </div>
 
-        {/* Scope toggle */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+      {/* Filters — only relevant in the 'new' scope. */}
+      {scope === 'new' && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20, alignItems: 'center' }}>
+          {/* Channel filter */}
+          <FilterSelect
+            value={channelId ?? 'all'}
+            baseQuery={baseQuery}
+            filterKey="channel"
+            options={[
+              { value: 'all', label: 'All channels' },
+              ...channels.map(ch => ({ value: ch.channel_id, label: `${ch.channel_title} (${ch.video_count})` })),
+            ]}
+            style={{ width: 'auto', minWidth: 160, fontSize: 12, padding: '6px 10px' }}
+          />
+
+          {/* Category filter */}
+          <FilterSelect
+            value={categoryId != null ? String(categoryId) : 'all'}
+            baseQuery={baseQuery}
+            filterKey="category"
+            options={[
+              { value: 'all', label: 'All topics' },
+              ...categories.map(cat => ({
+                value: String(cat.category_id),
+                label: `${CATEGORY_LABELS[cat.category_id] ?? `Category ${cat.category_id}`} (${cat.video_count})`,
+              })),
+            ]}
+            style={{ width: 'auto', minWidth: 160, fontSize: 12, padding: '6px 10px' }}
+          />
+
+          {/* Uncaptioned toggle */}
           <Link
-            href={urlWith({ scope: 'new' })}
+            href={urlWith({ uncaptioned: onlyUncaptioned ? null : '1' })}
             className="chip"
             style={{
-              background: scope === 'new' ? '#5b9eff' : '#1f1f26',
-              color: scope === 'new' ? '#0a0a0c' : '#c2c2cb',
-              borderColor: scope === 'new' ? '#5b9eff' : '#2a2a33',
+              background: onlyUncaptioned ? 'rgba(255,155,107,0.12)' : '#1f1f26',
+              color: onlyUncaptioned ? '#ff9b6b' : '#c2c2cb',
+              borderColor: onlyUncaptioned ? 'rgba(255,155,107,0.35)' : '#2a2a33',
               padding: '4px 12px',
               fontSize: 12,
+              textDecoration: 'none',
             }}
           >
-            New {scope === 'new' && result.total > 0 ? `(${result.total})` : ''}
-          </Link>
-          <Link
-            href={urlWith({ scope: 'saved' })}
-            className="chip"
-            style={{
-              background: scope === 'saved' ? '#f5c542' : '#1f1f26',
-              color: scope === 'saved' ? '#0a0a0c' : '#c2c2cb',
-              borderColor: scope === 'saved' ? '#f5c542' : '#2a2a33',
-              padding: '4px 12px',
-              fontSize: 12,
-            }}
-          >
-            ★ Saved
+            {onlyUncaptioned ? '✓ ' : ''}Only uncaptioned
           </Link>
         </div>
+      )}
 
-        {/* Filters — only relevant in the 'new' scope. */}
-        {scope === 'new' && (
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20, alignItems: 'center' }}>
-            {/* Channel filter */}
-            <FilterSelect
-              value={channelId ?? 'all'}
-              baseQuery={baseQuery}
-              filterKey="channel"
-              options={[
-                { value: 'all', label: 'All channels' },
-                ...channels.map(ch => ({ value: ch.channel_id, label: `${ch.channel_title} (${ch.video_count})` })),
-              ]}
-              style={{ width: 'auto', minWidth: 160, fontSize: 12, padding: '6px 10px' }}
-            />
+      {/* Feed */}
+      <InboxFeed videos={result.videos} scope={scope} />
 
-            {/* Category filter */}
-            <FilterSelect
-              value={categoryId != null ? String(categoryId) : 'all'}
-              baseQuery={baseQuery}
-              filterKey="category"
-              options={[
-                { value: 'all', label: 'All topics' },
-                ...categories.map(cat => ({
-                  value: String(cat.category_id),
-                  label: `${CATEGORY_LABELS[cat.category_id] ?? `Category ${cat.category_id}`} (${cat.video_count})`,
-                })),
-              ]}
-              style={{ width: 'auto', minWidth: 160, fontSize: 12, padding: '6px 10px' }}
-            />
-
-            {/* Uncaptioned toggle */}
-            <Link
-              href={urlWith({ uncaptioned: onlyUncaptioned ? null : '1' })}
-              className="chip"
-              style={{
-                background: onlyUncaptioned ? 'rgba(255,155,107,0.12)' : '#1f1f26',
-                color: onlyUncaptioned ? '#ff9b6b' : '#c2c2cb',
-                borderColor: onlyUncaptioned ? 'rgba(255,155,107,0.35)' : '#2a2a33',
-                padding: '4px 12px',
-                fontSize: 12,
-                textDecoration: 'none',
-              }}
-            >
-              {onlyUncaptioned ? '✓ ' : ''}Only uncaptioned
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 24, alignItems: 'center' }}>
+          {page > 1 && (
+            <Link href={pageUrl(page - 1)} className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px' }}>
+              ← Prev
             </Link>
-          </div>
-        )}
+          )}
+          <span style={{ color: '#8b8b94', fontSize: 12 }}>
+            Page {page} of {totalPages}
+          </span>
+          {page < totalPages && (
+            <Link href={pageUrl(page + 1)} className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px' }}>
+              Next →
+            </Link>
+          )}
+        </div>
+      )}
 
-        {/* Feed */}
-        <InboxFeed videos={result.videos} scope={scope} />
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 24, alignItems: 'center' }}>
-            {page > 1 && (
-              <Link href={pageUrl(page - 1)} className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px' }}>
-                ← Prev
-              </Link>
-            )}
-            <span style={{ color: '#8b8b94', fontSize: 12 }}>
-              Page {page} of {totalPages}
-            </span>
-            {page < totalPages && (
-              <Link href={pageUrl(page + 1)} className="btn btn-ghost" style={{ fontSize: 12, padding: '6px 12px' }}>
-                Next →
-              </Link>
-            )}
-          </div>
-        )}
-
-        {/* Stats footer */}
-        {result.videos.length > 0 && (
-          <div style={{ marginTop: 24, color: '#5a5a64', fontSize: 11, textAlign: 'center' }}>
-            {formatCount(result.total)} video{result.total === 1 ? '' : 's'} · sorted by relevance
-          </div>
-        )}
-      </main>
-    </div>
+      {/* Stats footer */}
+      {result.videos.length > 0 && (
+        <div style={{ marginTop: 24, color: '#5a5a64', fontSize: 11, textAlign: 'center' }}>
+          {formatCount(result.total)} video{result.total === 1 ? '' : 's'} · sorted by relevance
+        </div>
+      )}
+    </AppShell>
   );
 }

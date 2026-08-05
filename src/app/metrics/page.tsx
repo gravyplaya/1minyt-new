@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { getMetrics } from '@/lib/metrics';
 import type { CoverageStat, WeeklyBucket } from '@/lib/metrics';
-import { HeaderBar } from '../_components/HeaderBar';
+import { AppShell } from '../_components/AppShell';
 import { formatCount, formatRelative, youtubeVideoUrl } from '../_lib/format';
 import { isConnected, getUserProfile } from '@/lib/tokens';
 
@@ -20,14 +20,8 @@ export default async function MetricsPage() {
   ]);
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} profile={profile} />
-      <main className="metrics-main" style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
-        <div style={{ marginBottom: 14 }}>
-          <Link href="/" style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to subscriptions</Link>
-        </div>
-
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📊 Your metrics</h1>
+    <AppShell active="metrics" connected={connected} profile={profile} mainStyle={{ maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📊 Your metrics</h1>
         <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 28 }}>
           Derived from your summary and chat activity. Updated automatically as you use the app.
         </p>
@@ -152,8 +146,7 @@ export default async function MetricsPage() {
             )}
           </>
         )}
-      </main>
-    </div>
+    </AppShell>
   );
 }
 

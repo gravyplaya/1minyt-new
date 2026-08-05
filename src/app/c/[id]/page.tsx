@@ -4,9 +4,10 @@ import Image from 'next/image';
 import { getChannel, listFolders, listTags } from '@/lib/repo';
 import { listVideosByChannel } from '@/lib/video-repo';
 import { listChannelPlaylists } from '@/lib/playlist-repo';
-import { HeaderBar } from '../../_components/HeaderBar';
+import { AppShell } from '../../_components/AppShell';
 import { ChannelEditor } from '../../_components/ChannelEditor';
 import { VideosPanel } from '../../_components/VideosPanel';
+import { RemoveChannelButton } from '../../_components/RemoveChannelButton';
 import { ChannelCatalogSearch } from '../../_components/ChannelCatalogSearch';
 import { ChannelPlaylists } from '../../_components/ChannelPlaylists';
 import { MostReferencedSection } from '../../_components/MostReferencedSection';
@@ -35,13 +36,8 @@ export default async function ChannelPage({ params }: Props) {
   ]);
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} profile={profile} />
-      <main className="channel-detail-main" style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
-        <div style={{ marginBottom: 14 }}>
-          <Link href="/" style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to subscriptions</Link>
-        </div>
-        <header className="channel-header" style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 28 }}>
+    <AppShell active="" connected={connected} profile={profile} mainStyle={{ maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+      <header className="channel-header" style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 28 }}>
           {channel.thumbnail_url ? (
             <Image
               src={channel.thumbnail_url}
@@ -94,8 +90,9 @@ export default async function ChannelPage({ params }: Props) {
           <ExportButton channelId={channel.channel_id} summaryCount={videos.filter(v => v.summary).length} />
         </div>
 
-        <VideosPanel channelId={channel.channel_id} initialVideos={videos} connected={connected} />
-      </main>
-    </div>
+        <VideosPanel channelId={channel.channel_id} initialVideos={videos} connected={connected} musicFlag={channel.music_flag} />
+
+        <RemoveChannelButton channelId={channel.channel_id} title={channel.title} />
+    </AppShell>
   );
 }

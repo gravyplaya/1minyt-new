@@ -398,6 +398,15 @@ export async function createTag(name: string, color?: string): Promise<TagRow> {
   }
 }
 
+export async function renameTag(id: string, name: string): Promise<void> {
+  const client = await getDb();
+  try {
+    await client.query('UPDATE tags SET name = $1 WHERE id = $2', [name.trim(), id]);
+  } finally {
+    client.release();
+  }
+}
+
 export async function deleteTag(id: string): Promise<void> {
   const client = await getDb();
   try {
