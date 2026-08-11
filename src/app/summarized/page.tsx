@@ -19,7 +19,7 @@ export default async function SummarizedPage() {
   ]);
 
   return (
-    <AppShell active="summarized" connected={connected} profile={profile} mainStyle={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="library" libraryActive="summarized" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>✦ Summarized videos</h1>
       <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
         Every video with a cached summary, sorted by most recently summarized.

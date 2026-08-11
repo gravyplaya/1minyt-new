@@ -20,7 +20,7 @@ export default async function MetricsPage() {
   ]);
 
   return (
-    <AppShell active="metrics" connected={connected} profile={profile} mainStyle={{ maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="library" libraryActive="metrics" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📊 Your metrics</h1>
         <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 28 }}>
           Derived from your summary and chat activity. Updated automatically as you use the app.

@@ -22,7 +22,7 @@ export default async function DigestsPage() {
   ]);
 
   return (
-    <AppShell active="digests" connected={connected} profile={profile} mainStyle={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="settings" settingsActive="digests" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📋 New-video digest</h1>

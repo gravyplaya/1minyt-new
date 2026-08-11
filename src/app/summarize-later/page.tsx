@@ -18,7 +18,7 @@ export default async function SummarizeLaterPage() {
   ]);
 
   return (
-    <AppShell active="summarize-later" connected={connected} profile={profile} mainStyle={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="library" libraryActive="summarize-later" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>🔖 Summarize Later</h1>
         <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>

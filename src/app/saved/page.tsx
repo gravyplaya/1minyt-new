@@ -23,7 +23,7 @@ export default async function SavedPage() {
   const readwiseConfigured = !!readwiseSettings && readwiseSettings.token.length > 0;
 
   return (
-    <AppShell active="saved" connected={connected} profile={profile} mainStyle={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="library" libraryActive="saved" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>★ Saved summaries</h1>
       <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
         Summaries you&apos;ve bookmarked for later reference, sorted by most recently saved.

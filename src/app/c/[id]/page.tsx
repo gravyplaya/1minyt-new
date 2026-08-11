@@ -36,7 +36,7 @@ export default async function ChannelPage({ params }: Props) {
   ]);
 
   return (
-    <AppShell active="" connected={connected} profile={profile} mainStyle={{ maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="channels" noRail connected={connected} profile={profile} mainStyle={{ maxWidth: 1200, margin: '0 auto', width: '100%' }}>
       <header className="channel-header" style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 28 }}>
           {channel.thumbnail_url ? (
             <Image

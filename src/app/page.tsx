@@ -5,9 +5,8 @@ import {
 } from "@/lib/queries";
 import { listFolders, listTags, latestSyncRun } from "@/lib/repo";
 import { isConnected, getUserProfile } from "@/lib/tokens";
-import { HeaderBar } from "./_components/HeaderBar";
+import { AppShell } from "./_components/AppShell";
 import { ChannelList } from "./_components/ChannelList";
-import { GlobalSidebar } from "./_components/GlobalSidebar";
 import { LandingPage } from "./_components/landing/LandingPage";
 
 interface PageProps {
@@ -86,54 +85,39 @@ export default async function HomePage({ searchParams }: PageProps) {
   }
 
   return (
-    <div
-      style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}
+    <AppShell
+      tab="channels"
+      connected={connected}
+      profile={profile}
+      lastSync={lastSync?.started_at ?? null}
+      activeHome={true}
+      activeFolder={activeFolder}
+      activeTag={activeTag}
+      showMusic={showMusic}
+      showHidden={showHidden}
+      mainStyle={{ maxWidth: 'none', width: '100%' }}
     >
-      <HeaderBar connected={connected} profile={profile} lastSync={lastSync?.started_at ?? null} />
-
       {!connected ? (
         <LandingPage />
+      ) : counts.total === 0 ? (
+        <FirstRunSync lastSync={lastSync} />
       ) : (
-      <div
-        className="app-grid"
-        style={{ display: "grid", gridTemplateColumns: "280px 1fr", flex: 1 }}
-      >
-        {/* Sidebar */}
-        <GlobalSidebar
-          active="home"
-          activeFolder={activeFolder}
-          activeTag={activeTag}
+        <ChannelList
+          search={search}
+          folderId={activeFolder}
+          tagId={activeTag}
           showMusic={showMusic}
           showHidden={showHidden}
+          sort={sort}
+          dir={dir}
+          page={page}
+          pageSize={pageSize}
+          folders={folders}
+          tags={tags}
+          urlWith={urlWith}
         />
-
-        {/* Main */}
-        <main
-          className="main-content"
-          style={{ padding: "24px 32px", overflow: "auto" }}
-        >
-          {counts.total === 0 ? (
-            <FirstRunSync lastSync={lastSync} />
-          ) : (
-            <ChannelList
-              search={search}
-              folderId={activeFolder}
-              tagId={activeTag}
-              showMusic={showMusic}
-              showHidden={showHidden}
-              sort={sort}
-              dir={dir}
-              page={page}
-              pageSize={pageSize}
-              folders={folders}
-              tags={tags}
-              urlWith={urlWith}
-            />
-          )}
-        </main>
-      </div>
       )}
-    </div>
+    </AppShell>
   );
 }
 

@@ -95,7 +95,7 @@ export default async function InboxPage({ searchParams }: PageProps) {
   }
 
   return (
-    <AppShell active="inbox" connected={connected} profile={profile} mainStyle={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="inbox" connected={connected} profile={profile} mainStyle={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📥 Inbox</h1>
         <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>
