@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body {
+    background: #0a0a0c;
+    color: #e7e7ea;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 60px 40px;
+    margin: 0;
+  }
+  h1 {
+    font-size: 14px;
+    color: #8b8b94;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    margin: 60px 0 24px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #2a2a33;
+  }
+  h1:first-child { margin-top: 0; }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 48px;
+    flex-wrap: wrap;
+    margin-bottom: 40px;
+  }
+  .logo-card {
+    background: #15151a;
+    border: 1px solid #2a2a33;
+    border-radius: 16px;
+    padding: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 280px;
+    min-height: 160px;
+  }
+  .label {
+    font-size: 11px;
+    color: #5b9eff;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 12px;
+    text-align: center;
+  }
+  .logo-wrap { display: flex; flex-direction: column; align-items: center; }
+
+  /* Favicon preview */
+  .favicon-preview {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-top: 16px;
+  }
+  .favicon-box {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    background: #0a0a0c;
+    border: 1px solid #2a2a33;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .favicon-box.small { width: 32px; height: 32px; border-radius: 7px; }
+  .favicon-box.tiny { width: 16px; height: 16px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ========== DIRECTION 1: Clock + Play ========== -->
+<h1>Direction 1 — "The Minute Mark" (Clock + Play)</h1>
+
+<div class="row">
+  <!-- 1a: Icon only -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="120" height="120" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g1a" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- Clock ring -->
+        <circle cx="100" cy="100" r="85" fill="none" stroke="url(#g1a)" stroke-width="4" opacity="0.5"/>
+        <!-- Tick at 12 -->
+        <line x1="100" y1="15" x2="100" y2="28" stroke="url(#g1a)" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+        <!-- Play triangle as minute hand, pointing to 1 o'clock -->
+        <polygon points="0,-16 0,16 42,0" transform="translate(100,100) rotate(-60)" fill="url(#g1a)"/>
+        <!-- Center dot -->
+        <circle cx="100" cy="100" r="5" fill="url(#g1a)"/>
+      </svg>
+    </div>
+    <div class="label">1A — Icon Mark</div>
+  </div>
+
+  <!-- 1b: Icon + wordmark -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="280" height="120" viewBox="0 0 460 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g1b" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- Clock ring -->
+        <circle cx="100" cy="100" r="85" fill="none" stroke="url(#g1b)" stroke-width="4" opacity="0.5"/>
+        <!-- Tick at 12 -->
+        <line x1="100" y1="15" x2="100" y2="28" stroke="url(#g1b)" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+        <!-- Play triangle pointing to 1 o'clock -->
+        <polygon points="0,-16 0,16 42,0" transform="translate(100,100) rotate(-60)" fill="url(#g1b)"/>
+        <!-- Center dot -->
+        <circle cx="100" cy="100" r="5" fill="url(#g1b)"/>
+        <!-- Wordmark -->
+        <text x="210" y="118" font-size="62" font-weight="700" fill="#e7e7ea" font-family="ui-sans-serif, system-ui, sans-serif" letter-spacing="-2">1minyt</text>
+      </svg>
+    </div>
+    <div class="label">1B — Icon + Wordmark</div>
+  </div>
+</div>
+
+<!-- Favicon sizes for Direction 1 -->
+<div class="row">
+  <div class="logo-wrap">
+    <div class="logo-card" style="min-height:80px; padding:24px;">
+      <div class="favicon-preview">
+        <div class="favicon-box">
+          <svg width="36" height="36" viewBox="0 0 200 200">
+            <defs>
+              <linearGradient id="fav1" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#5b9eff"/><stop offset="100%" stop-color="#7c5cff"/>
+              </linearGradient>
+            </defs>
+            <circle cx="100" cy="100" r="90" fill="#15151a" stroke="url(#fav1)" stroke-width="8"/>
+            <polygon points="0,-18 0,18 48,0" transform="translate(100,100) rotate(-60)" fill="url(#fav1)"/>
+          </svg>
+        </div>
+        <div class="favicon-box small">
+          <svg width="24" height="24" viewBox="0 0 200 200">
+            <polygon points="0,-18 0,18 48,0" transform="translate(100,100) rotate(-60)" fill="url(#fav1)"/>
+          </svg>
+        </div>
+        <div class="favicon-box tiny">
+          <svg width="12" height="12" viewBox="0 0 200 200">
+            <polygon points="0,-18 0,18 48,0" transform="translate(100,100) rotate(-60)" fill="url(#fav1)"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="label">1C — Favicon sizes (48 / 32 / 16px)</div>
+  </div>
+</div>
+
+<!-- ========== DIRECTION 3: "1" as Play Triangle ========== -->
+<h1>Direction 3 — "1 Play" (Typographic Mark)</h1>
+
+<div class="row">
+  <!-- 3a: "1" triangle icon only -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="120" height="120" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g3a" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- "1" as a play triangle — tall, narrow, pointed -->
+        <!-- The triangle reads as both "1" and a play button -->
+        <polygon points="70,30 70,170 140,100" fill="url(#g3a)"/>
+      </svg>
+    </div>
+    <div class="label">3A — "1" as Play Triangle</div>
+  </div>
+
+  <!-- 3b: "1" triangle + wordmark -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="300" height="120" viewBox="0 0 500 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g3b" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- "1" play triangle -->
+        <polygon points="40,40 40,160 110,100" fill="url(#g3b)" rx="4"/>
+        <!-- "minyt" wordmark -->
+        <text x="130" y="122" font-size="58" font-weight="700" fill="#e7e7ea" font-family="ui-sans-serif, system-ui, sans-serif" letter-spacing="-1.5">minyt</text>
+      </svg>
+    </div>
+    <div class="label">3B — Triangle "1" + Wordmark</div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- 3c: "1" triangle with rounded version -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="120" height="120" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g3c" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+          <clipPath id="clip3c">
+            <polygon points="70,30 70,170 140,100"/>
+          </clipPath>
+        </defs>
+        <!-- Background rounded square -->
+        <rect x="20" y="20" width="160" height="160" rx="36" fill="#15151a" stroke="url(#g3c)" stroke-width="3"/>
+        <!-- "1" play triangle -->
+        <polygon points="70,30 70,170 140,100" fill="url(#g3c)"/>
+      </svg>
+    </div>
+    <div class="label">3C — App Icon (rounded square)</div>
+  </div>
+
+  <!-- 3d: alternative — "1" with play cutout -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="120" height="120" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="g3d" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- Bold "1" numeral -->
+        <text x="100" y="155" font-size="150" font-weight="900" fill="url(#g3d)" font-family="ui-sans-serif, system-ui, sans-serif" text-anchor="middle" letter-spacing="-8">1</text>
+        <!-- Play triangle cutout — small, at the base -->
+        <polygon points="95,110 95,130 115,120" fill="#0a0a0c"/>
+      </svg>
+    </div>
+    <div class="label">3D — "1" with Play Cutout</div>
+  </div>
+</div>
+
+<!-- ========== HYBRID: Clock ring + "1" play triangle ========== -->
+<h1>Hybrid — Clock Ring + "1" Play Triangle</h1>
+
+<div class="row">
+  <!-- H1: hybrid icon -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="120" height="120" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="gh1" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- Clock ring -->
+        <circle cx="100" cy="100" r="88" fill="none" stroke="url(#gh1)" stroke-width="4" opacity="0.4"/>
+        <!-- "1" as play triangle, centered, pointing right -->
+        <polygon points="68,38 68,162 138,100" fill="url(#gh1)"/>
+      </svg>
+    </div>
+    <div class="label">H1 — Clock + "1" Triangle</div>
+  </div>
+
+  <!-- H2: hybrid + wordmark -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="300" height="120" viewBox="0 0 500 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="gh2" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- Clock ring -->
+        <circle cx="100" cy="100" r="88" fill="none" stroke="url(#gh2)" stroke-width="4" opacity="0.4"/>
+        <!-- "1" play triangle -->
+        <polygon points="68,38 68,162 138,100" fill="url(#gh2)"/>
+        <!-- Wordmark -->
+        <text x="210" y="118" font-size="62" font-weight="700" fill="#e7e7ea" font-family="ui-sans-serif, system-ui, sans-serif" letter-spacing="-2">1minyt</text>
+      </svg>
+    </div>
+    <div class="label">H2 — Hybrid + Wordmark</div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- H3: hybrid app icon -->
+  <div class="logo-wrap">
+    <div class="logo-card" style="min-height:80px; padding:24px;">
+      <div class="favicon-preview">
+        <div class="favicon-box">
+          <svg width="36" height="36" viewBox="0 0 200 200">
+            <defs>
+              <linearGradient id="favh" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#5b9eff"/><stop offset="100%" stop-color="#7c5cff"/>
+              </linearGradient>
+            </defs>
+            <rect x="10" y="10" width="180" height="180" rx="40" fill="#15151a"/>
+            <polygon points="68,38 68,162 138,100" fill="url(#favh)"/>
+          </svg>
+        </div>
+        <div class="favicon-box small">
+          <svg width="24" height="24" viewBox="0 0 200 200">
+            <polygon points="68,38 68,162 138,100" fill="url(#favh)"/>
+          </svg>
+        </div>
+        <div class="favicon-box tiny">
+          <svg width="12" height="12" viewBox="0 0 200 200">
+            <polygon points="68,38 68,162 138,100" fill="url(#favh)"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="label">H3 — Favicon sizes (48 / 32 / 16px)</div>
+  </div>
+
+  <!-- H4: clock + "1" with tick mark variant -->
+  <div class="logo-wrap">
+    <div class="logo-card">
+      <svg width="120" height="120" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="gh4" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#5b9eff"/>
+            <stop offset="100%" stop-color="#7c5cff"/>
+          </linearGradient>
+        </defs>
+        <!-- Clock ring — slightly thicker -->
+        <circle cx="100" cy="100" r="90" fill="none" stroke="url(#gh4)" stroke-width="5" opacity="0.35"/>
+        <!-- Tick mark at 1 o'clock position (where the hand points) -->
+        <line x1="145" y1="22" x2="155" y2="18" stroke="url(#gh4)" stroke-width="5" stroke-linecap="round"/>
+        <!-- "1" play triangle -->
+        <polygon points="70,35 70,165 140,100" fill="url(#gh4)"/>
+      </svg>
+    </div>
+    <div class="label">H4 — With 1 o'clock tick accent</div>
+  </div>
+</div>
+
+</body>
+</html>

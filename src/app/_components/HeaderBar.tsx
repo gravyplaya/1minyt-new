@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import Link from 'next/link';
 import type { UserProfile } from '@/lib/tokens';
 import { SyncButton } from './SyncButton';
@@ -76,21 +77,13 @@ export function HeaderBar({
 
 function Logo() {
   return (
-    <span
-      style={{
-        width: 24,
-        height: 24,
-        borderRadius: 6,
-        background: 'linear-gradient(135deg, #5b9eff, #7c5cff)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#0a0a0c',
-        fontWeight: 800,
-        fontSize: 14,
-      }}
-    >
-      1m
-    </span>
+    <Image
+      src="/images/logo_only.jpg"
+      alt="1minyt logo"
+      width={24}
+      height={24}
+      priority
+      style={{ borderRadius: 6, objectFit: 'cover' }}
+    />
   );
 }

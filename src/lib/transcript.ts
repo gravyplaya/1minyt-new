@@ -1,13 +1,14 @@
 /**
  * Transcript fetcher for TAV-4 (1-Click Instant Summaries).
  *
- * Strategy:
- *   1. Try YouTube's Innertube player API (ANDROID client) to resolve caption
- *      track URLs, then fetch the timedtext XML. The ANDROID client returns
- *      URLs with valid signatures that work from any IP — unlike the web
- *      client's embedded player response, which now hardcodes ip=0.0.0.0
- *      and returns 0-byte responses.
- *   2. Fall back to `yt-dlp --write-auto-sub` which writes a VTT file we parse.
+ * Strategy (fallback chain):
+ *   1. Innertube ANDROID client → timedtext XML (primary, no API key, no
+ *      binary dep, no rate limits).
+ *   2. Supadata API → JSON transcript chunks (reliable hosted API with AI
+ *      fallback for uncaptioned videos; requires SUPADATA_API_KEY).
+ *   3. yt-dlp --write-auto-sub → VTT (age-restricted / consent-wall edge
+ *      cases; requires system binary).
+ *   4. Whisper speech-to-text (TAV-19; requires backend config).
  *
  * The transcript infrastructure here is reused by Chat-with-Video (TAV-3), so
  * the surface is deliberately narrow: `fetchTranscript(videoId) -> string|null`.
@@ -25,10 +26,10 @@ import { transcribeWithWhisper, isWhisperEnabled } from './whisper';
 
 export interface TranscriptResult {
   text: string;
-  source: 'timedtext' | 'yt-dlp' | 'whisper';
+  source: 'timedtext' | 'supadata' | 'yt-dlp' | 'whisper';
   /** Approx char count of the cleaned text — handy for truncation decisions. */
   length: number;
-  /** Timestamped segments. Populated for XML (timedtext), VTT (yt-dlp), and Whisper (verbose_json/SRT). */
+  /** Timestamped segments. Populated for all sources when available. */
   segments?: TranscriptSegment[];
 }
 
@@ -37,50 +38,53 @@ export interface TranscriptResult {
  * available (the video may be music-only, have no speech, or be region-blocked).
  */
 export async function fetchTranscript(videoId: string): Promise<TranscriptResult | null> {
-  // 1. Fast path: Innertube player API → timedtext XML.
-  const direct = await fetchViaInnertube(videoId).catch(() => null);
-  if (direct && direct.text.trim().length > 40) {
-    return {
-      text: direct.text,
-      source: 'timedtext',
-      length: direct.text.length,
-      segments: direct.segments,
-    };
+  // 1. Fast path: Innertube ANDROID client → timedtext XML. Free, no key,
+  //    no rate limits. Handles the majority of captioned videos.
+  const android = await fetchViaInnertube(videoId).catch(err => {
+    console.warn(`fetchTranscript: Innertube failed for ${videoId}:`, err instanceof Error ? err.message : err);
+    return null;
+  });
+  if (android && android.text.trim().length > 40) {
+    return { text: android.text, source: 'timedtext', length: android.text.length, segments: android.segments };
   }
 
-  // 2. yt-dlp fallback. Slower but handles more cases and languages.
-  const viaYtDlp = await fetchViaYtDlp(videoId).catch(() => null);
+  // 2. Supadata API fallback. A hosted transcript service that covers videos
+  //    where Innertube fails (UNPLAYABLE, empty bodies, age-restricted) and
+  //    uncaptioned videos via its own AI transcription. Costs credits per
+  //    request, so it sits after the free Innertube path.
+  if (isSupadataEnabled()) {
+    const viaSupadata = await fetchViaSupadata(videoId).catch(err => {
+      console.warn(`fetchTranscript: Supadata failed for ${videoId}:`, err instanceof Error ? err.message : err);
+      return null;
+    });
+    if (viaSupadata && viaSupadata.text.trim().length > 40) {
+      return { text: viaSupadata.text, source: 'supadata', length: viaSupadata.text.length, segments: viaSupadata.segments };
+    }
+  }
+
+  // 3. yt-dlp fallback. Handles age-restricted / consent-wall edge cases that
+  //    even Supadata might miss. Requires the system binary.
+  const viaYtDlp = await fetchViaYtDlp(videoId).catch(err => {
+    console.warn(`fetchTranscript: yt-dlp failed for ${videoId}:`, err instanceof Error ? err.message : err);
+    return null;
+  });
   if (viaYtDlp && viaYtDlp.text.trim().length > 40) {
-    return {
-      text: viaYtDlp.text,
-      source: 'yt-dlp',
-      length: viaYtDlp.text.length,
-      segments: viaYtDlp.segments,
-    };
+    return { text: viaYtDlp.text, source: 'yt-dlp', length: viaYtDlp.text.length, segments: viaYtDlp.segments };
   }
 
-  // 3. Whisper speech-to-text fallback (TAV-19). Triggers only when no YouTube
-  //    captions exist at all and a Whisper backend is configured (OpenAI API
-  //    key or whisper.cpp binary). Uncaptioned videos (~40% of the catalog)
-  //    become summarizable through this path.
+  // 4. Whisper speech-to-text fallback (TAV-19). Last resort for uncaptioned
+  //    videos when no other path produced text. Requires a backend config.
   if (isWhisperEnabled()) {
     const viaWhisper = await transcribeWithWhisper(videoId).catch(err => {
-      // whisper.ts logs internally, but a null return with no breadcrumb here
-      // makes a failing backend hard to trace from the fetch path — leave a
-      // short warning at the call site too.
       console.warn(`fetchTranscript: Whisper fallback failed for ${videoId}:`, err instanceof Error ? err.message : err);
       return null;
     });
     if (viaWhisper && viaWhisper.text.trim().length > 40) {
-      return {
-        text: viaWhisper.text,
-        source: 'whisper',
-        length: viaWhisper.text.length,
-        segments: viaWhisper.segments,
-      };
+      return { text: viaWhisper.text, source: 'whisper', length: viaWhisper.text.length, segments: viaWhisper.segments };
     }
   }
 
+  console.warn(`fetchTranscript: all strategies exhausted for ${videoId}, returning null.`);
   return null;
 }
 
@@ -170,13 +174,109 @@ async function fetchViaInnertube(videoId: string): Promise<ParsedTranscript | nu
   if (!pick?.baseUrl) return null;
 
   // The ANDROID client returns format=3 XML regardless of &fmt=, so we parse
-  // XML rather than json3.
-  const xml = await fetch(pick.baseUrl, {
-    headers: { 'User-Agent': ANDROID_USER_AGENT },
-  }).then(r => r.text());
+  // XML rather than json3. Retry once on empty body — YouTube occasionally
+  // returns 0-byte responses due to transient signature/caching issues.
+  const xml = await fetchCaptionXml(pick.baseUrl, ANDROID_USER_AGENT);
+  if (!xml) return null;
 
   return parseTimedTextXml(xml);
 }
+
+/**
+ * Fetch a caption track URL and return the body text. Retries once on empty
+ * response — YouTube's timedtext CDN occasionally returns 200 with a 0-byte
+ * body due to transient signature or cache issues, and a second request
+ * typically succeeds.
+ */
+async function fetchCaptionXml(baseUrl: string, userAgent: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const resp = await fetch(baseUrl, {
+      headers: { 'User-Agent': userAgent },
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => null);
+
+    if (!resp || !resp.ok) {
+      if (attempt === 0) continue;
+      return null;
+    }
+
+    const body = await resp.text().catch(() => '');
+    // YouTube sometimes returns 200 with an empty body — retry once.
+    if (body.trim().length === 0 && attempt === 0) continue;
+    return body;
+  }
+  return null;
+}
+
+// ----- Supadata API ----------------------------------------------------------
+
+const SUPADATA_BASE = 'https://api.supadata.ai/v1';
+
+/** Whether the Supadata API key is configured. */
+function isSupadataEnabled(): boolean {
+  return !!process.env.SUPADATA_API_KEY?.trim();
+}
+
+/**
+ * Fetch a transcript via the Supadata API. This is a hosted service that
+ * resolves YouTube captions (and falls back to AI transcription for
+ * uncaptioned videos) — covering videos where Innertube returns UNPLAYABLE
+ * or an empty caption body.
+ *
+ * API: GET /youtube/transcript?videoId=…&lang=en
+ * Returns { content: [{text, offset, duration, lang}, …], lang, availableLangs }
+ * or an error (206 = transcript-unavailable, 404 = not found, etc.).
+ *
+ * We request the chunked format (not `text=true`) so we get timestamps for
+ * chapter detection and chat citations.
+ */
+async function fetchViaSupadata(videoId: string): Promise<ParsedTranscript | null> {
+  const apiKey = process.env.SUPADATA_API_KEY!.trim();
+  const url = `${SUPADATA_BASE}/youtube/transcript?videoId=${encodeURIComponent(videoId)}&lang=en`;
+
+  const resp = await fetch(url, {
+    headers: {
+      'x-api-key': apiKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  // 206 = transcript-unavailable, 404 = not found — treat as "no transcript".
+  if (resp.status === 206 || resp.status === 404) return null;
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`Supadata API ${resp.status}: ${detail.slice(0, 300)}`);
+  }
+
+  const data = (await resp.json()) as {
+    content?: Array<{ text: string; offset: number; duration: number; lang: string }>;
+    lang?: string;
+    availableLangs?: string[];
+  };
+
+  if (!Array.isArray(data.content) || data.content.length === 0) return null;
+
+  const segments: TranscriptSegment[] = [];
+  const lines: string[] = [];
+
+  for (let i = 0; i < data.content.length; i++) {
+    const chunk = data.content[i];
+    const text = chunk.text.replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    const startMs = Math.round(chunk.offset);
+    const endMs = startMs + Math.round(chunk.duration);
+    segments.push({ text, start_ms: startMs, end_ms: endMs, seg_index: i });
+    lines.push(text);
+  }
+
+  const text = clean(lines.join(' '));
+  if (text.length < 40) return null;
+
+  return { text, segments };
+}
+
+// ----- XML parsing -----------------------------------------------------------
 
 /**
  * Parse YouTube's timedtext format=3 XML.
@@ -244,11 +344,11 @@ function parseTimedTextXml(xml: string): ParsedTranscript {
 /** Decode the handful of XML entities YouTube uses in timedtext. */
 function decodeXmlEntities(s: string): string {
   return s
-    .replace(/&amp;/g, '&')
     .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
+    .replace(/"/g, '"')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/&/g, '&');
 }
 
 // ----- yt-dlp fallback -------------------------------------------------------

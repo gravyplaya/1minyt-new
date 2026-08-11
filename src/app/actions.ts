@@ -129,8 +129,8 @@ export interface TranscriptOutcome {
   ok: boolean;
   videoId: string;
   transcript?: string;
-  /** The fetch method used this run: timedtext / yt-dlp (YouTube captions) or whisper. */
-  source?: 'timedtext' | 'yt-dlp' | 'whisper' | 'cached';
+  /** The fetch method used this run: timedtext / supadata / yt-dlp (YouTube captions) or whisper. */
+  source?: 'timedtext' | 'supadata' | 'yt-dlp' | 'whisper' | 'cached';
   /** TAV-19: persisted origin of the transcript — 'youtube' or 'whisper'. Null when uncaptioned/unavailable. */
   transcriptSource?: TranscriptSource | null;
   /** TAV-19: whether a Whisper fallback was attempted but produced nothing. */
@@ -163,7 +163,7 @@ export async function fetchTranscriptAction(videoId: string): Promise<Transcript
       };
     }
     // Map the fetch source to the persisted transcript source:
-    // timedtext + yt-dlp → 'youtube'; whisper → 'whisper'.
+    // timedtext + supadata + yt-dlp → 'youtube'; whisper → 'whisper'.
     const source: TranscriptSource = fetched.source === 'whisper' ? 'whisper' : 'youtube';
     await setTranscript(videoId, fetched.text, source);
     return { ok: true, videoId, transcript: fetched.text, source: fetched.source, transcriptSource: source };
