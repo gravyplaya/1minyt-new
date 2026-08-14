@@ -6,13 +6,21 @@
  * the rows that actually changed.
  */
 
-import { fetchAllSubscriptions, fetchChannels, fetchLikedVideos } from './youtube';
+import { fetchChannels, fetchLikedVideos, fetchChannelUploadsRss, youtubeClientWithToken, type RssVideoEntry } from './youtube';
 import { getValidAccessToken } from './tokens';
-import { recordSyncFinish, recordSyncStart, upsertChannel } from './repo';
+import { recordSyncFinish, recordSyncStart, upsertChannels, listRecentlySyncedChannelIds } from './repo';
 import { classifyMusic } from './music-classifier';
-import { recordLikedVideos } from './video-repo';
+import { recordLikedVideos, upsertVideosFromRss } from './video-repo';
 import type { ChannelRow } from './types';
 import type { youtube_v3 } from 'googleapis';
+
+/** Skip fetching channel details for channels synced within this window. */
+const SYNC_SKIP_SECONDS = 3600;
+
+/** Max concurrent RSS feed fetches. Each is a free, unauthenticated HTTP
+ *  request with a 10s timeout. 10 is conservative — YouTube's CDN can handle
+ *  it easily and it keeps us from opening 200 sockets at once. */
+const RSS_CONCURRENCY = 10;
 
 export interface SyncResult {
   seen: number;
@@ -22,40 +30,80 @@ export interface SyncResult {
   likesSynced: number;
   /** New `video_likes` rows actually inserted (re-synced videos are skipped). */
   likesInserted: number;
+  /** Total RSS video entries fetched across all channels. */
+  videosSynced: number;
+  /** New `videos` rows actually inserted by the RSS sync. */
+  videosInserted: number;
   errors: string[];
 }
 
 export async function syncSubscriptions(): Promise<SyncResult> {
   const runId = await recordSyncStart();
-  const result: SyncResult = { seen: 0, new: 0, updated: 0, likesSynced: 0, likesInserted: 0, errors: [] };
+  const result: SyncResult = { seen: 0, new: 0, updated: 0, likesSynced: 0, likesInserted: 0, videosSynced: 0, videosInserted: 0, errors: [] };
   try {
     const accessToken = await getValidAccessToken();
-    const subs = await fetchAllSubscriptions(accessToken);
-    result.seen = subs.length;
+    const yt = youtubeClientWithToken(accessToken);
 
-    // Extract channel ids and skip subscriptions whose snippet is missing.
-    const ids = subs
-      .map(s => s.snippet?.resourceId?.channelId)
-      .filter((x): x is string => Boolean(x));
+    // --- Pipelined subscription fetch + channel detail fetch ----------------
+    // Walk subscription pages sequentially (nextPageToken is inherently serial),
+    // but kick off fetchChannels for each page's channel IDs as soon as the
+    // page arrives — those API calls run in parallel while the next subscription
+    // page is being fetched. We also skip channel details for channels synced
+    // within SYNC_SKIP_SECONDS to save API quota on repeat syncs.
+    const recentlySynced = await listRecentlySyncedChannelIds(SYNC_SKIP_SECONDS);
 
-    // Fetch channel details in batches of 50.
-    const channels = await fetchChannels(accessToken, ids);
-    const channelById = new Map<string, typeof channels[number]>();
-    for (const ch of channels) {
-      if (ch.id) channelById.set(ch.id, ch);
+    const allSubs: youtube_v3.Schema$Subscription[] = [];
+    const channelDetailPromises: Promise<youtube_v3.Schema$Channel[]>[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const res = await yt.subscriptions.list({
+        part: ['snippet', 'contentDetails'],
+        mine: true,
+        maxResults: 50,
+        pageToken,
+        order: 'alphabetical',
+      });
+      const items = res.data.items ?? [];
+      allSubs.push(...items);
+
+      // Extract channel IDs from this page and start fetching details for
+      // the ones we don't already have fresh data for.
+      const pageIds = items
+        .map(s => s.snippet?.resourceId?.channelId)
+        .filter((x): x is string => Boolean(x));
+      const staleIds = pageIds.filter(id => !recentlySynced.has(id));
+      if (staleIds.length > 0) {
+        channelDetailPromises.push(fetchChannels(accessToken, staleIds));
+      }
+
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+
+    result.seen = allSubs.length;
+
+    // Await all channel detail fetches (they've been running in parallel).
+    const channelResults = await Promise.all(channelDetailPromises);
+    const channelById = new Map<string, youtube_v3.Schema$Channel>();
+    for (const batch of channelResults) {
+      for (const ch of batch) {
+        if (ch.id) channelById.set(ch.id, ch);
+      }
     }
 
+    // --- Build ChannelRow[] for batch upsert --------------------------------
     const now = Math.floor(Date.now() / 1000);
-
-    for (const sub of subs) {
+    const rows: ChannelRow[] = allSubs.map(sub => {
       const channelId = sub.snippet?.resourceId?.channelId;
-      if (!channelId) continue;
-      const ch = channelById.get(channelId);
+      // channelId is always present here because we filtered earlier, but TS
+      // doesn't know that — fall back to an empty string to satisfy the type.
+      const cid = channelId ?? '';
+      const ch = channelById.get(cid);
       const fallbackTitle = sub.snippet?.title ?? undefined;
       const cls = classifyMusic(ch, fallbackTitle);
 
       const row: ChannelRow = {
-        channel_id: channelId,
+        channel_id: cid,
         title: ch?.snippet?.title ?? fallbackTitle ?? '(unknown)',
         handle: ch?.snippet?.title?.startsWith('@') ? ch.snippet.title : extractHandle(ch),
         description: ch?.snippet?.description ?? null,
@@ -72,14 +120,35 @@ export async function syncSubscriptions(): Promise<SyncResult> {
         synced_at: now,
         created_at: now,
         updated_at: now,
-        // TAV-17: persist previously-discarded fields.
         topic_categories: jsonString(ch?.topicDetails?.topicCategories ?? null),
         banner_image_url: ch?.brandingSettings?.image?.bannerImageUrl ?? null,
         branding_keywords: jsonString(ch?.brandingSettings?.channel?.keywords ?? null),
       };
+      return row;
+    }).filter(r => r.channel_id !== '');
 
-      const { created } = await upsertChannel(row);
-      if (created) result.new += 1; else result.updated += 1;
+    // --- Batch upsert: single query instead of N×(SELECT+INSERT/UPDATE) ------
+    const { created, updated } = await upsertChannels(rows);
+    result.new = created;
+    result.updated = updated;
+
+    // --- RSS video sync: fetch recent uploads for all channels in parallel ---
+    // Each channel's RSS feed is free and unauthenticated. We fetch them with
+    // bounded concurrency (RSS_CONCURRENCY) so we don't open 200 sockets at
+    // once. All entries are collected and upserted in a single batch query —
+    // no per-video DB round-trips. API enrichment (duration, tags, category)
+    // is skipped here to avoid burning quota; it happens lazily when the user
+    // visits a channel page or summarizes a video.
+    try {
+      const channelIds = rows.map(r => r.channel_id);
+      const rssEntries = await fetchAllRssFeeds(channelIds, RSS_CONCURRENCY);
+      result.videosSynced = rssEntries.length;
+      if (rssEntries.length > 0) {
+        const { inserted } = await upsertVideosFromRss(rssEntries);
+        result.videosInserted = inserted;
+      }
+    } catch (err) {
+      result.errors.push(`RSS video sync: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // TAV-41: also pull the user's liked videos. Liking is independent of
@@ -159,4 +228,34 @@ function parseIsoDate(iso: string | null | undefined): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+/**
+ * Fetch RSS feeds for all channel IDs with bounded concurrency.
+ * Returns a flat array of entries, each tagged with its channelId.
+ * Failed feeds (network errors, empty feeds, HTTP errors) are silently
+ * skipped — RSS is best-effort, and a single channel's feed being down
+ * shouldn't block the sync.
+ */
+async function fetchAllRssFeeds(
+  channelIds: string[],
+  concurrency: number,
+): Promise<(RssVideoEntry & { videoId: string; channelId: string })[]> {
+  const results: (RssVideoEntry & { videoId: string; channelId: string })[] = [];
+
+  for (let i = 0; i < channelIds.length; i += concurrency) {
+    const batch = channelIds.slice(i, i + concurrency);
+    const settled = await Promise.allSettled(
+      batch.map(async (channelId) => {
+        const entries = await fetchChannelUploadsRss(channelId, 15);
+        if (!entries) return [];
+        return entries.map(e => ({ ...e, videoId: e.videoId, channelId }));
+      }),
+    );
+    for (const s of settled) {
+      if (s.status === 'fulfilled') results.push(...s.value);
+    }
+  }
+
+  return results;
 }

@@ -601,70 +601,82 @@ function SummaryBody({
         </ul>
       </div>
 
-      {summary.follow_ups.length > 0 && (
-        <div>
-          <div
-            style={{
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              fontSize: 11,
-              color: "#8b8b94",
-              marginBottom: 6,
-            }}
-          >
-            Recommended follow-ups
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {summary.follow_ups.map((f) => (
-              <div
-                key={f.video_id}
-                className="follow-up-row"
-                style={{ display: "flex", gap: 10, alignItems: "flex-start" }}
-              >
-                <a
-                  href={youtubeVideoUrl(f.video_id)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    color: "#5b9eff",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    flex: 1,
-                    minWidth: 0,
-                  }}
+      {/* Follow-ups, chapters, and references in a 2-column grid so they
+          sit side-by-side instead of each stretching full width. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          columnGap: 24,
+          rowGap: 16,
+          marginTop: 12,
+        }}
+      >
+        {summary.follow_ups.length > 0 && (
+          <div>
+            <div
+              style={{
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                fontSize: 11,
+                color: "#8b8b94",
+                marginBottom: 6,
+              }}
+            >
+              Recommended follow-ups
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {summary.follow_ups.map((f) => (
+                <div
+                  key={f.video_id}
+                  className="follow-up-row"
+                  style={{ display: "flex", gap: 10, alignItems: "flex-start" }}
                 >
-                  {f.title}
-                </a>
-                <span
-                  className="follow-up-reason"
-                  style={{
-                    color: "#8b8b94",
-                    fontSize: 12,
-                    fontStyle: "italic",
-                    maxWidth: 360,
-                  }}
-                >
-                  {f.reason}
-                </span>
-              </div>
-            ))}
+                  <a
+                    href={youtubeVideoUrl(f.video_id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      color: "#5b9eff",
+                      fontSize: 13,
+                      fontWeight: 500,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    {f.title}
+                  </a>
+                  <span
+                    className="follow-up-reason"
+                    style={{
+                      color: "#8b8b94",
+                      fontSize: 12,
+                      fontStyle: "italic",
+                      maxWidth: 200,
+                    }}
+                  >
+                    {f.reason}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* TAV-13: AI-generated chapter list. Rendered between the summary and the
-          chat area. Each chapter seeks the embedded inline player. */}
-      {chapters && chapters.length > 0 && (
-        <ChapterList chapters={chapters} onSeek={onSeek} />
-      )}
+        {/* TAV-13: AI-generated chapter list. Each chapter seeks the embedded
+            inline player. */}
+        {chapters && chapters.length > 0 && (
+          <ChapterList chapters={chapters} onSeek={onSeek} />
+        )}
 
-      {/* TAV-20: Community Pulse — what the top commenters are saying. */}
-      {communityPulse && communityPulse.comments.length > 0 && (
-        <CommunityPulseSection pulse={communityPulse} />
-      )}
+        {/* TAV-20: Community Pulse — what the top commenters are saying. */}
+        {communityPulse && communityPulse.comments.length > 0 && (
+          <CommunityPulseSection pulse={communityPulse} />
+        )}
 
-      {/* TAV-29: Cross-video reference graph — References / Referenced by. */}
-      <VideoReferencesSection videoId={videoId} />
+        {/* TAV-29: Cross-video reference graph — References / Referenced by. */}
+        <VideoReferencesSection videoId={videoId} />
+      </div>
     </div>
   );
 }
@@ -679,7 +691,7 @@ function ChapterList({
   onSeek: (seconds: number) => void;
 }) {
   return (
-    <div style={{ marginTop: 12, marginBottom: 4 }}>
+    <div style={{ marginBottom: 4 }}>
       <div
         style={{
           textTransform: "uppercase",
@@ -749,7 +761,7 @@ function ChapterList({
 function CommunityPulseSection({ pulse }: { pulse: CommunityPulse }) {
   const top = pulse.comments.slice(0, 5);
   return (
-    <div style={{ marginTop: 12, marginBottom: 4 }}>
+    <div style={{ marginBottom: 4 }}>
       <div
         style={{
           textTransform: "uppercase",

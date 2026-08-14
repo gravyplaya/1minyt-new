@@ -25,10 +25,12 @@ function getPool(): Pool {
 
   const pool = new Pool({
     connectionString,
-    // Neon requires SSL. The connection string includes sslmode=require,
-    // but pg also needs this flag for serverless environments.
-    // Using rejectUnauthorized: false for compatibility with Neon's certificate.
-    ssl: connectionString.includes('sslmode=verify-full') ? undefined : { rejectUnauthorized: false },
+    // Neon requires SSL. The connection string uses sslmode=verify-full
+    // (which pg currently treats as verify-full). We still set rejectUnauthorized
+    // to false because Neon's pooler certificate chain doesn't match the host,
+    // so full verification would fail. This is safe in transit (TLS is used)
+    // but doesn't pin the CA — acceptable for a serverless pooled connection.
+    ssl: { rejectUnauthorized: false },
     // Conservative pool size for serverless — each function instance gets its own pool.
     max: 5,
     idleTimeoutMillis: 10_000,

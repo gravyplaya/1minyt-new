@@ -97,8 +97,8 @@ export async function listInboxVideos(query: InboxQuery = {}): Promise<{ videos:
           v.transcript_status,
           vs.state AS triage_state,
           EXISTS (SELECT 1 FROM summaries s WHERE s.video_id = v.video_id) AS has_summary,
-          -- engagement: log-scaled view + like counts (null → 0 contribution)
-          (LN(COALESCE(v.view_count, 1)) + LN(COALESCE(v.like_count, 0) + 1)) AS engagement,
+          -- engagement: log-scaled view + like counts (null/0 → 0 contribution)
+          (LN(GREATEST(COALESCE(v.view_count, 1), 1)) + LN(COALESCE(v.like_count, 0) + 1)) AS engagement,
           -- recency: exponential decay, half-life ~7 days (604800s).
           -- Null published_at → treated as epoch (0), so recency → ~0.
           -- Clamp the exponent to >= -700 so EXP() never underflows to

@@ -63,6 +63,7 @@ export async function AppShell({
   noRail?: boolean;
 }) {
   const hasRail =
+    connected &&
     !noRail &&
     ((tab === 'channels') ||
      (tab === 'library' && libraryActive) ||
@@ -76,12 +77,14 @@ export async function AppShell({
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <HeaderBar connected={connected} profile={profile} lastSync={lastSync} />
-      <TabBar
-        active={tab}
-        inboxCount={badgeProps.inboxCount}
-        libraryCount={badgeProps.libraryCount}
-        channelCount={badgeProps.channelCount}
-      />
+      {connected && (
+        <TabBar
+          active={tab}
+          inboxCount={badgeProps.inboxCount}
+          libraryCount={badgeProps.libraryCount}
+          channelCount={badgeProps.channelCount}
+        />
+      )}
       <div
         className="app-body"
         style={{

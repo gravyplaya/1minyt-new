@@ -7,6 +7,7 @@
 import { getDb, query, withTransaction } from './db';
 import { newId } from './id';
 import type { Chapter, ChatMessage, CommunityPulse, FollowUp, MostReferencedVideo, ReferenceType, SummaryRow, TranscriptSource, TranscriptStatus, VideoComment, VideoRow, VideoWithSummary, VideoReferenceWithTarget } from './types';
+import type { RssVideoEntry } from './youtube';
 
 const SUMMARY_MODEL_KEY = process.env.SUMMARY_MODEL?.trim() || 'openai/gpt-oss-20b:free';
 
@@ -96,6 +97,82 @@ export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcri
         now, now,
       ],
     );
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Batch upsert video rows from RSS feed entries in a single query.
+ * Replaces the per-video SELECT+INSERT/UPDATE loop. On conflict, preserves
+ * transcript fields (transcript, transcript_status, transcript_fetched_at,
+ * transcript_source) and overwrites metadata fields (title, description,
+ * thumbnail, view_count, etc.) with the fresh RSS values. duration_seconds
+ * is only set from API enrichment, not RSS — so we use COALESCE to preserve
+ * any previously-enriched value.
+ *
+ * Returns the count of newly inserted rows (for sync reporting).
+ */
+export async function upsertVideosFromRss(
+  entries: ReadonlyArray<{ videoId: string; channelId: string } & RssVideoEntry>,
+): Promise<{ inserted: number }> {
+  if (entries.length === 0) return { inserted: 0 };
+  const client = await getDb();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const N = entries.length;
+    const ids = entries.map(e => e.videoId);
+    const channelIds = entries.map(e => e.channelId);
+    const titles = entries.map(e => e.title || '(untitled)');
+    const descriptions = entries.map(e => e.description);
+    const thumbnails = entries.map(e => e.thumbnailUrl);
+    const publishedAts = entries.map(e => e.publishedAt);
+    const viewCounts = entries.map(e => e.viewCount);
+    const createdAts = new Array(N).fill(now) as number[];
+
+    const { rows } = await client.query<{ inserted: boolean }>(
+      `INSERT INTO videos (
+         video_id, channel_id, title, description, thumbnail_url,
+         duration_seconds, published_at,
+         transcript_status,
+         view_count, like_count, comment_count, favorite_count,
+         tags, category_id, is_live, live_streaming_details,
+         created_at, updated_at
+       )
+       SELECT
+         video_id, channel_id, title, description, thumbnail_url,
+         NULL, published_at,
+         'pending',
+         view_count, NULL, NULL, NULL,
+         NULL, NULL, 0, NULL,
+         created_at, created_at
+       FROM unnest(
+         $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
+         $6::integer[], $7::integer[],
+         $8::integer[]
+       ) AS t(
+         video_id, channel_id, title, description, thumbnail_url,
+         published_at, view_count,
+         created_at
+       )
+       ON CONFLICT (video_id) DO UPDATE SET
+         channel_id = EXCLUDED.channel_id,
+         title = COALESCE(EXCLUDED.title, videos.title),
+         description = COALESCE(EXCLUDED.description, videos.description),
+         thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, videos.thumbnail_url),
+         published_at = COALESCE(EXCLUDED.published_at, videos.published_at),
+         view_count = COALESCE(EXCLUDED.view_count, videos.view_count),
+         updated_at = $9
+       RETURNING (xmax = 0) AS inserted`,
+      [
+        ids, channelIds, titles, descriptions, thumbnails,
+        publishedAts, viewCounts,
+        createdAts,
+        now,
+      ],
+    );
+
+    return { inserted: rows.filter(r => r.inserted).length };
   } finally {
     client.release();
   }

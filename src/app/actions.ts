@@ -38,6 +38,7 @@ export async function triggerSyncAction() {
   revalidatePath('/unfiled');
   revalidatePath('/likes');
   revalidatePath('/history');
+  revalidatePath('/inbox');
   return result;
 }
 

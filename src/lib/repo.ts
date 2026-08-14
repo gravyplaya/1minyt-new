@@ -182,6 +182,118 @@ export async function getChannel(channelId: string): Promise<ChannelWithRelation
   }
 }
 
+/**
+ * Batch upsert channels in a single query using unnest().
+ * Replaces the per-channel SELECT+INSERT/UPDATE loop that made ~400 sequential
+ * DB round-trips for 200 subscriptions. Uses PostgreSQL's (xmax = 0) trick to
+ * distinguish inserts from updates in the RETURNING clause.
+ *
+ * Preserves `hidden`, `notes`, and `created_at` on conflict (matching the
+ * per-row upsertChannel behaviour): only metadata fields are overwritten.
+ */
+export async function upsertChannels(inputs: ChannelRow[]): Promise<{ created: number; updated: number }> {
+  if (inputs.length === 0) return { created: 0, updated: 0 };
+  const client = await getDb();
+  try {
+    const N = inputs.length;
+    const cols = {
+      channel_id:       inputs.map(r => r.channel_id),
+      title:            inputs.map(r => r.title),
+      handle:           inputs.map(r => r.handle),
+      description:      inputs.map(r => r.description),
+      thumbnail_url:    inputs.map(r => r.thumbnail_url),
+      subscriber_count: inputs.map(r => r.subscriber_count),
+      video_count:      inputs.map(r => r.video_count),
+      country:          inputs.map(r => r.country),
+      custom_url:       inputs.map(r => r.custom_url),
+      music_flag:       inputs.map(r => r.music_flag),
+      music_score:      inputs.map(r => r.music_score),
+      hidden:           new Array(N).fill(0) as (0 | 1)[],
+      notes:            new Array(N).fill(null) as (string | null)[],
+      subscribed_at:    inputs.map(r => r.subscribed_at),
+      synced_at:        inputs.map(r => r.synced_at),
+      created_at:       inputs.map(r => r.created_at),
+      updated_at:       inputs.map(r => r.updated_at),
+      topic_categories:  inputs.map(r => r.topic_categories),
+      banner_image_url:  inputs.map(r => r.banner_image_url),
+      branding_keywords: inputs.map(r => r.branding_keywords),
+    };
+
+    const { rows } = await client.query<{ inserted: boolean }>(
+      `INSERT INTO channels (
+         channel_id, title, handle, description, thumbnail_url,
+         subscriber_count, video_count, country, custom_url,
+         music_flag, music_score, hidden, notes,
+         subscribed_at, synced_at, created_at, updated_at,
+         topic_categories, banner_image_url, branding_keywords
+       )
+       SELECT
+         channel_id, title, handle, description, thumbnail_url,
+         subscriber_count, video_count, country, custom_url,
+         music_flag, music_score, hidden, notes,
+         subscribed_at, synced_at, created_at, updated_at,
+         topic_categories, banner_image_url, branding_keywords
+       FROM unnest(
+         $1::text[],  $2::text[],  $3::text[],  $4::text[],  $5::text[],
+         $6::integer[], $7::integer[], $8::text[],  $9::text[],
+         $10::integer[], $11::real[],
+         $12::integer[], $13::text[],
+         $14::integer[], $15::integer[], $16::integer[], $17::integer[],
+         $18::text[], $19::text[], $20::text[]
+       ) AS t(
+         channel_id, title, handle, description, thumbnail_url,
+         subscriber_count, video_count, country, custom_url,
+         music_flag, music_score, hidden, notes,
+         subscribed_at, synced_at, created_at, updated_at,
+         topic_categories, banner_image_url, branding_keywords
+       )
+       ON CONFLICT (channel_id) DO UPDATE SET
+         title=EXCLUDED.title, handle=EXCLUDED.handle, description=EXCLUDED.description,
+         thumbnail_url=EXCLUDED.thumbnail_url, subscriber_count=EXCLUDED.subscriber_count,
+         video_count=EXCLUDED.video_count, country=EXCLUDED.country, custom_url=EXCLUDED.custom_url,
+         music_flag=EXCLUDED.music_flag, music_score=EXCLUDED.music_score,
+         subscribed_at=EXCLUDED.subscribed_at, synced_at=EXCLUDED.synced_at, updated_at=EXCLUDED.updated_at,
+         topic_categories=EXCLUDED.topic_categories,
+         banner_image_url=EXCLUDED.banner_image_url,
+         branding_keywords=EXCLUDED.branding_keywords
+       RETURNING (xmax = 0) AS inserted`,
+      [
+        cols.channel_id, cols.title, cols.handle, cols.description, cols.thumbnail_url,
+        cols.subscriber_count, cols.video_count, cols.country, cols.custom_url,
+        cols.music_flag, cols.music_score,
+        cols.hidden, cols.notes,
+        cols.subscribed_at, cols.synced_at, cols.created_at, cols.updated_at,
+        cols.topic_categories, cols.banner_image_url, cols.branding_keywords,
+      ],
+    );
+
+    const created = rows.filter(r => r.inserted).length;
+    return { created, updated: rows.length - created };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Return the set of channel_ids that were synced within the last
+ * `thresholdSeconds`. Used by the sync orchestrator to skip fetching
+ * channel details for recently-synced channels — saves API quota and
+ * reduces the payload on repeat syncs.
+ */
+export async function listRecentlySyncedChannelIds(thresholdSeconds: number): Promise<Set<string>> {
+  const client = await getDb();
+  try {
+    const cutoff = Math.floor(Date.now() / 1000) - thresholdSeconds;
+    const { rows } = await client.query<{ channel_id: string }>(
+      'SELECT channel_id FROM channels WHERE synced_at > $1',
+      [cutoff],
+    );
+    return new Set(rows.map(r => r.channel_id));
+  } finally {
+    client.release();
+  }
+}
+
 export async function upsertChannel(input: ChannelRow): Promise<{ created: boolean }> {
   const client = await getDb();
   try {

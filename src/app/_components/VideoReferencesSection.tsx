@@ -42,7 +42,7 @@ export function VideoReferencesSection({ videoId }: { videoId: string }) {
   }
 
   return (
-    <div style={{ marginTop: 12 }}>
+    <div style={{ marginTop: 0 }}>
       {outgoing && outgoing.length > 0 && (
         <ReferenceList
           title="References"
@@ -134,7 +134,7 @@ function ReferenceList({
                     color: "#8b8b94",
                     fontSize: 12,
                     fontStyle: "italic",
-                    maxWidth: 360,
+                    maxWidth: 200,
                   }}
                 >
                   {r.context}
