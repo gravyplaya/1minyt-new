@@ -456,6 +456,21 @@ export interface VideoReferenceWithTarget extends VideoReference {
   target_channel_title: string | null;
 }
 
+/**
+ * An incoming reference edge — another video's summary cited *this* video.
+ * Hydrated with the *source* (citing) video's title + channel so the UI can
+ * link to the citing video without a second round-trip. Uses `source_*` field
+ * names (not `target_*`) so the direction is unambiguous.
+ */
+export interface IncomingReference extends VideoReference {
+  /** Title of the citing (source) video. */
+  source_video_title: string | null;
+  /** Thumbnail of the citing (source) video. */
+  source_video_thumbnail: string | null;
+  /** Channel title of the citing (source) video. */
+  source_channel_title: string | null;
+}
+
 /** A counted reference entry — used by the "most referenced" aggregation. */
 export interface MostReferencedVideo {
   video_id: string;

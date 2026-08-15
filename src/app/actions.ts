@@ -29,7 +29,7 @@ import { detectChapters } from '@/lib/chapters';
 import { indexVideo, indexSummary, isIndexed, chunkCount, searchAcross, getSegments } from '@/lib/vector-store';
 import { chatWithVideo } from '@/lib/chat';
 import { friendlyError } from '@/lib/errors';
-import type { Chapter, ChatCitation, ChatMessage, ChannelCatalogHit, CommunityPulse, MostReferencedVideo, PlaylistRow, PlaylistSummary, PlaylistVideoRow, SummaryRow, TranscriptSegment, TranscriptSource, VideoWithSummary, TranscriptSearchResult, VideoReferenceWithTarget } from '@/lib/types';
+import type { Chapter, ChatCitation, ChatMessage, ChannelCatalogHit, CommunityPulse, IncomingReference, MostReferencedVideo, PlaylistRow, PlaylistSummary, PlaylistVideoRow, SummaryRow, TranscriptSegment, TranscriptSource, VideoWithSummary, TranscriptSearchResult, VideoReferenceWithTarget } from '@/lib/types';
 
 export async function triggerSyncAction() {
   const result = await syncSubscriptions();
@@ -887,7 +887,7 @@ export interface VideoReferencesResult {
   /** Videos this video's summary cites (outgoing edges). */
   outgoing: VideoReferenceWithTarget[];
   /** Videos whose summaries cite this video (incoming edges). */
-  incoming: VideoReferenceWithTarget[];
+  incoming: IncomingReference[];
   error?: string;
 }
 
