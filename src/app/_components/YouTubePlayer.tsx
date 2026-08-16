@@ -226,8 +226,13 @@ export function YouTubePlayer({
         setError(null);
         setReady(false);
         readyRef.current = false;
-        // The IFrame replaces this child element.
+        // The IFrame replaces this child element. Positioned absolute to fill
+        // the containerRef div regardless of whether it's in full 16:9 mode
+        // (position: relative + paddingTop aspect-ratio) or minimized mode
+        // (1×1px hidden). This keeps the ref div at a stable tree position.
         const mount = document.createElement('div');
+        mount.style.position = 'absolute';
+        mount.style.inset = '0';
         mount.style.width = '100%';
         mount.style.height = '100%';
         containerRef.current.innerHTML = '';
@@ -344,7 +349,50 @@ export function YouTubePlayer({
     playerRef.current?.seekTo(seconds, true);
   };
 
+  // -------- Shared controls (full + minimized share the same JSX) -----------
+
+  /**
+   * TAV-58: Renders playback controls for both full and minimized layouts.
+   * `compact` shrinks the button labels and spacing for the minimized bar.
+   * Called as a function (not a component) to avoid creating a new component
+   * type on every render.
+   */
+  const renderControls = (compact: boolean) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: compact ? 8 : 10, fontSize: compact ? 11 : 12, color: '#c2c2cb' }}>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        onClick={togglePlay}
+        disabled={!ready}
+        aria-label={playing ? 'Pause' : 'Play'}
+        style={{ fontSize: compact ? 12 : 13, padding: compact ? '2px 8px' : '4px 10px', minWidth: compact ? 48 : 64 }}
+      >
+        {ready ? (playing ? (compact ? '⏸' : '⏸ Pause') : (compact ? '▶' : '▶ Play')) : '…'}
+      </button>
+      <span style={{ fontFamily: 'monospace', color: '#8b8b94', minWidth: compact ? undefined : 80, textAlign: 'center' }}>
+        {fmtTime(currentTime)} / {fmtTime(duration)}
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={duration || 0}
+        step={0.1}
+        value={Math.min(currentTime, duration || 0)}
+        onChange={onScrub}
+        disabled={!ready || duration === 0}
+        aria-label="Seek"
+        style={{ flex: 1, accentColor: '#5b9eff', minWidth: compact ? 60 : undefined }}
+      />
+    </div>
+  );
+
   // -------- Render -----------------------------------------------------------
+  //
+  // TAV-58: The containerRef div is always rendered at the same tree position
+  // (first child of the root) regardless of `minimize`. Only its style and the
+  // surrounding chrome change. This invariant keeps the IFrame alive in the DOM
+  // when minimize flips, so audio continues uninterrupted and the player is not
+  // orphaned on un-minimize (the creation effect is keyed on [videoId] only).
 
   if (error) {
     return (
@@ -362,39 +410,6 @@ export function YouTubePlayer({
     );
   }
 
-  // Shared control bar — rendered in both full and minimized layouts.
-  const controls = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#c2c2cb' }}>
-      <button
-        type="button"
-        className="btn btn-ghost"
-        onClick={togglePlay}
-        disabled={!ready}
-        aria-label={playing ? 'Pause' : 'Play'}
-        style={{ fontSize: 13, padding: '4px 10px', minWidth: 64 }}
-      >
-        {ready ? (playing ? '⏸ Pause' : '▶ Play') : '…'}
-      </button>
-      <span style={{ fontFamily: 'monospace', color: '#8b8b94', minWidth: 80, textAlign: 'center' }}>
-        {fmtTime(currentTime)} / {fmtTime(duration)}
-      </span>
-      <input
-        type="range"
-        min={0}
-        max={duration || 0}
-        step={0.1}
-        value={Math.min(currentTime, duration || 0)}
-        onChange={onScrub}
-        disabled={!ready || duration === 0}
-        aria-label="Seek"
-        style={{ flex: 1, accentColor: '#5b9eff' }}
-      />
-    </div>
-  );
-
-  // TAV-58: Minimized layout — thin bar with thumbnail + title + controls.
-  // The IFrame container is kept mounted (1×1px, visually hidden) so audio
-  // keeps playing; we only stop rendering the full 16:9 frame.
   if (minimize) {
     return (
       <div
@@ -409,7 +424,11 @@ export function YouTubePlayer({
           minWidth: 0,
         }}
       >
-        {/* Hidden IFrame mount — keeps the player alive for audio */}
+        {/*
+          Always-mounted IFrame container — same tree position as the full
+          layout (first child of the root). Collapsed to 1×1px + visually
+          hidden so the player instance survives the minimize toggle.
+        */}
         <div
           ref={containerRef}
           style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none', overflow: 'hidden', left: -9999 }}
@@ -441,7 +460,7 @@ export function YouTubePlayer({
             ♪
           </div>
         )}
-        {/* Title + controls */}
+        {/* Title + compact controls */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div
             style={{
@@ -455,32 +474,7 @@ export function YouTubePlayer({
           >
             {title ?? 'Now playing'}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={togglePlay}
-              disabled={!ready}
-              aria-label={playing ? 'Pause' : 'Play'}
-              style={{ fontSize: 12, padding: '2px 8px', minWidth: 48 }}
-            >
-              {ready ? (playing ? '⏸' : '▶') : '…'}
-            </button>
-            <span style={{ fontFamily: 'monospace', color: '#8b8b94' }}>
-              {fmtTime(currentTime)} / {fmtTime(duration)}
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 0}
-              step={0.1}
-              value={Math.min(currentTime, duration || 0)}
-              onChange={onScrub}
-              disabled={!ready || duration === 0}
-              aria-label="Seek"
-              style={{ flex: 1, accentColor: '#5b9eff', minWidth: 60 }}
-            />
-          </div>
+          {renderControls(true)}
         </div>
       </div>
     );
@@ -488,13 +482,16 @@ export function YouTubePlayer({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {/* IFrame mount point */}
-      <div style={{ position: 'relative', width: '100%', paddingTop: '56.25%', background: '#000', borderRadius: 10, overflow: 'hidden' }}>
-        <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
-      </div>
+      {/*
+        Always-mounted IFrame container — first child of the root, matching the
+        minimized layout's tree position. Only the style differs (full 16:9 vs
+        hidden 1×1px). The inner absolute-positioned wrapper preserves the
+        aspect-ratio box model used before TAV-58's minimize work.
+      */}
+      <div ref={containerRef} style={{ position: 'relative', width: '100%', paddingTop: '56.25%', background: '#000', borderRadius: 10, overflow: 'hidden' }} />
 
       {/* Controls */}
-      {controls}
+      {renderControls(false)}
 
       {/* Now-playing transcript segment highlight */}
       {segments && segments.length > 0 && activeIndex >= 0 && (
