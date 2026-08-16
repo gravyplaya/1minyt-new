@@ -10,6 +10,13 @@
  *
  * Also tracks the current playback position and — when `segments` are provided —
  * highlights the transcript segment that is currently playing.
+ *
+ * TAV-58 additions:
+ *  - `onEnded?: () => void` — fires when the player reaches ENDED state, so
+ *    parent queue layouts (WatchQueue, MusicQueue) can auto-advance.
+ *  - `minimize?: boolean` — collapses the 16:9 video into a thin bar
+ *    (thumbnail + title + controls). The IFrame keeps playing audio; we only
+ *    stop rendering the full-size frame. No player pause/destroy on minimize.
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -135,9 +142,41 @@ export interface YouTubePlayerProps {
    * `pendingSeekRef` + `onReady` for deferred seeks instead of passing this.
    */
   initialStart?: number;
+  /**
+   * TAV-58: Fired when the player reaches the ENDED state (state 0). Parent
+   * components (WatchQueue, MusicQueue) use this to auto-advance to the next
+   * video. Stable signature — no player internals are passed.
+   */
+  onEnded?: () => void;
+  /**
+   * TAV-58: When true, collapses the 16:9 video frame into a thin bar showing
+   * only the thumbnail, title, and playback controls. The IFrame keeps playing
+   * audio in the background; the player is NOT paused or destroyed. This is a
+   * render/layout concern only.
+   */
+  minimize?: boolean;
+  /**
+   * TAV-58: Title shown in the minimized bar. Optional — the bar still works
+   * without it, but callers that have video metadata should pass it for context.
+   */
+  title?: string;
+  /**
+   * TAV-58: Thumbnail URL shown in the minimized bar. Falls back to a generic
+   * placeholder when not provided.
+   */
+  thumbnailUrl?: string | null;
 }
 
-export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouTubePlayerProps) {
+export function YouTubePlayer({
+  videoId,
+  segments,
+  onReady,
+  initialStart,
+  onEnded,
+  minimize = false,
+  title,
+  thumbnailUrl,
+}: YouTubePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
   const readyRef = useRef(false);
@@ -154,6 +193,7 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
   // Stable callback so we don't re-create the player on every render.
   const onReadyRef = useRef(onReady);
   const initialStartRef = useRef(initialStart ?? 0);
+  const onEndedRef = useRef(onEnded);
   // Sync refs in an effect to satisfy react-hooks/refs (no ref writes during render).
   useEffect(() => {
     onReadyRef.current = onReady;
@@ -161,6 +201,9 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
   useEffect(() => {
     initialStartRef.current = initialStart ?? 0;
   }, [initialStart]);
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
 
   // Imperative seek exposed to the parent.
   const seekTo = useCallback((seconds: number) => {
@@ -220,6 +263,12 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
                   if (d) setDuration(d);
                 } catch { /* ignore */ }
               }
+              // TAV-58: notify parent when the video finishes so queue layouts
+              // can auto-advance. Guard against the ENDED firing before the
+              // ready callback has completed (cancelled guard above handles it).
+              if (state === window.YT!.PlayerState.ENDED) {
+                onEndedRef.current?.();
+              }
             },
           },
         });
@@ -239,7 +288,7 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
       playerRef.current = null;
     };
     // We intentionally only re-create the player when videoId changes. seekTo
-    // is stable; onReady/initialStart are captured via refs.
+    // is stable; onReady/initialStart/onEnded are captured via refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
 
@@ -313,6 +362,130 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
     );
   }
 
+  // Shared control bar — rendered in both full and minimized layouts.
+  const controls = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#c2c2cb' }}>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        onClick={togglePlay}
+        disabled={!ready}
+        aria-label={playing ? 'Pause' : 'Play'}
+        style={{ fontSize: 13, padding: '4px 10px', minWidth: 64 }}
+      >
+        {ready ? (playing ? '⏸ Pause' : '▶ Play') : '…'}
+      </button>
+      <span style={{ fontFamily: 'monospace', color: '#8b8b94', minWidth: 80, textAlign: 'center' }}>
+        {fmtTime(currentTime)} / {fmtTime(duration)}
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={duration || 0}
+        step={0.1}
+        value={Math.min(currentTime, duration || 0)}
+        onChange={onScrub}
+        disabled={!ready || duration === 0}
+        aria-label="Seek"
+        style={{ flex: 1, accentColor: '#5b9eff' }}
+      />
+    </div>
+  );
+
+  // TAV-58: Minimized layout — thin bar with thumbnail + title + controls.
+  // The IFrame container is kept mounted (1×1px, visually hidden) so audio
+  // keeps playing; we only stop rendering the full 16:9 frame.
+  if (minimize) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '8px 12px',
+          background: '#15151a',
+          border: '1px solid #2a2a33',
+          borderRadius: 10,
+          minWidth: 0,
+        }}
+      >
+        {/* Hidden IFrame mount — keeps the player alive for audio */}
+        <div
+          ref={containerRef}
+          style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none', overflow: 'hidden', left: -9999 }}
+          aria-hidden="true"
+        />
+        {/* Thumbnail */}
+        {thumbnailUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={thumbnailUrl}
+            alt={title ?? ''}
+            style={{ width: 48, height: 48, borderRadius: 6, objectFit: 'cover', flexShrink: 0, background: '#1f1f26' }}
+          />
+        ) : (
+          <div
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 6,
+              background: '#1f1f26',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              fontSize: 18,
+            }}
+            aria-hidden="true"
+          >
+            ♪
+          </div>
+        )}
+        {/* Title + controls */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#e7e7ea',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {title ?? 'Now playing'}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={togglePlay}
+              disabled={!ready}
+              aria-label={playing ? 'Pause' : 'Play'}
+              style={{ fontSize: 12, padding: '2px 8px', minWidth: 48 }}
+            >
+              {ready ? (playing ? '⏸' : '▶') : '…'}
+            </button>
+            <span style={{ fontFamily: 'monospace', color: '#8b8b94' }}>
+              {fmtTime(currentTime)} / {fmtTime(duration)}
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={0.1}
+              value={Math.min(currentTime, duration || 0)}
+              onChange={onScrub}
+              disabled={!ready || duration === 0}
+              aria-label="Seek"
+              style={{ flex: 1, accentColor: '#5b9eff', minWidth: 60 }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {/* IFrame mount point */}
@@ -321,32 +494,7 @@ export function YouTubePlayer({ videoId, segments, onReady, initialStart }: YouT
       </div>
 
       {/* Controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#c2c2cb' }}>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={togglePlay}
-          disabled={!ready}
-          aria-label={playing ? 'Pause' : 'Play'}
-          style={{ fontSize: 13, padding: '4px 10px', minWidth: 64 }}
-        >
-          {ready ? (playing ? '⏸ Pause' : '▶ Play') : '…'}
-        </button>
-        <span style={{ fontFamily: 'monospace', color: '#8b8b94', minWidth: 80, textAlign: 'center' }}>
-          {fmtTime(currentTime)} / {fmtTime(duration)}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.1}
-          value={Math.min(currentTime, duration || 0)}
-          onChange={onScrub}
-          disabled={!ready || duration === 0}
-          aria-label="Seek"
-          style={{ flex: 1, accentColor: '#5b9eff' }}
-        />
-      </div>
+      {controls}
 
       {/* Now-playing transcript segment highlight */}
       {segments && segments.length > 0 && activeIndex >= 0 && (
