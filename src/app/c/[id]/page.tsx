@@ -12,6 +12,7 @@ import { ChannelCatalogSearch } from '../../_components/ChannelCatalogSearch';
 import { ChannelPlaylists } from '../../_components/ChannelPlaylists';
 import { MostReferencedSection } from '../../_components/MostReferencedSection';
 import { ExportButton } from '../../_components/ExportButton';
+import { QueueChannelButton } from '../../_components/QueueChannelButton';
 import { formatCount, formatRelative, youtubeChannelUrl } from '../../_lib/format';
 import { isConnected, getUserProfile } from '@/lib/tokens';
 
@@ -88,6 +89,12 @@ export default async function ChannelPage({ params }: Props) {
 
         <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
           <ExportButton channelId={channel.channel_id} summaryCount={videos.filter(v => v.summary).length} />
+          {/* TAV-61: Queue this channel — batch-pin recent videos to Watch/Music queue */}
+          <QueueChannelButton
+            channelId={channel.channel_id}
+            videoIds={videos.slice(0, 10).map(v => v.video_id)}
+            musicFlag={channel.music_flag}
+          />
         </div>
 
         <VideosPanel channelId={channel.channel_id} initialVideos={videos} connected={connected} musicFlag={channel.music_flag} />

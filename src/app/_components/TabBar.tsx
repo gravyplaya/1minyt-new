@@ -1,20 +1,23 @@
 import Link from 'next/link';
 
 /**
- * Top-level tab navigation. 5 tabs that group the former 10 sidebar links.
- * Server component — fetches badge counts for Inbox and Library (Summarize Later).
+ * Top-level tab navigation. 7 tabs that group the former 10 sidebar links.
+ * Server component — fetches badge counts for Inbox, Library (Summarize Later),
+ * Watch (unwatched queue length) and Music (unplayed queue length).
  */
 
-export type TabId = 'channels' | 'inbox' | 'library' | 'search' | 'settings';
+export type TabId = 'channels' | 'watch' | 'music' | 'inbox' | 'library' | 'search' | 'settings';
 
 interface TabBarProps {
   active: TabId;
   inboxCount: number;
   libraryCount: number;
   channelCount: number;
+  watchCount: number;
+  musicCount: number;
 }
 
-export function TabBar({ active, inboxCount, libraryCount, channelCount }: TabBarProps) {
+export function TabBar({ active, inboxCount, libraryCount, channelCount, watchCount, musicCount }: TabBarProps) {
   const tabs: Array<{
     id: TabId;
     label: string;
@@ -22,6 +25,8 @@ export function TabBar({ active, inboxCount, libraryCount, channelCount }: TabBa
     badge?: number;
   }> = [
     { id: 'channels', label: 'Channels', href: '/', badge: channelCount },
+    { id: 'watch', label: 'Watch', href: '/watch', badge: watchCount },
+    { id: 'music', label: 'Music', href: '/music', badge: musicCount },
     { id: 'inbox', label: 'Inbox', href: '/inbox', badge: inboxCount },
     { id: 'library', label: 'Library', href: '/saved', badge: libraryCount },
     { id: 'search', label: 'Search', href: '/search' },
