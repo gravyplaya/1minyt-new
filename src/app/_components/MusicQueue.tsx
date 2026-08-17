@@ -26,7 +26,7 @@ import {
   pinMultipleToQueueTopAction,
   deferToLaterQueueAction,
 } from '@/app/actions';
-import { formatRelative, youtubeVideoUrl } from '../_lib/format';
+import { formatRelative, formatDuration, youtubeVideoUrl } from '../_lib/format';
 
 /** Number of top queue items to shuffle when the user clicks Shuffle. */
 const SHUFFLE_TOP_N = 5;
@@ -44,10 +44,15 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
   const playerHandleRef = useRef<YouTubePlayerHandle | null>(null);
   const [, startTransition] = useTransition();
 
-  // TAV-59: local reorderable copy of the queue.
+  // TAV-59: local reorderable copy of the queue. Synced from the prop when the
+  // server re-renders. Uses the cancelled-flag pattern so the update is
+  // synchronous — no microtask window where handleEnded reads a stale queue[0].
   const [localQueue, setLocalQueue] = useState<MusicQueueItem[]>(queue);
   useEffect(() => {
-    Promise.resolve().then(() => setLocalQueue(queue));
+    let cancelled = false;
+    const incoming = queue;
+    Promise.resolve().then(() => { if (!cancelled) setLocalQueue(incoming); });
+    return () => { cancelled = true; };
   }, [queue]);
 
   // TAV-59: auto-advance to the next track immediately when the current one
@@ -75,14 +80,18 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
     const fromIndex = dragIndexRef.current;
     dragIndexRef.current = null;
     if (fromIndex == null || fromIndex === toIndex) return;
+    // Bounds check: a concurrent skip/defer may have shrunk localQueue.
+    if (fromIndex >= localQueue.length || toIndex >= localQueue.length) return;
 
     const reordered = [...localQueue];
     const [moved] = reordered.splice(fromIndex, 1);
     reordered.splice(toIndex, 0, moved);
     setLocalQueue(reordered);
 
-    const pinCount = Math.max(fromIndex, toIndex) + 1;
-    const pinIds = reordered.slice(0, pinCount).map((q) => q.video_id);
+    // Pin only the affected range [min, max], not all items up to the max index.
+    const lo = Math.min(fromIndex, toIndex);
+    const hi = Math.max(fromIndex, toIndex);
+    const pinIds = reordered.slice(lo, hi + 1).map((q) => q.video_id);
     startTransition(async () => {
       await pinMultipleToQueueTopAction(pinIds, 'music');
       router.refresh();
@@ -303,6 +312,7 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
                 item={item}
                 index={i}
                 active={item.video_id === videoId}
+                isPinned={item.is_pinned}
                 onDragStart={handleDragStart}
                 onDrop={handleDrop}
                 onSkip={handleSkip}
@@ -323,6 +333,7 @@ function MusicQueueRow({
   item,
   index,
   active,
+  isPinned,
   onDragStart,
   onDrop,
   onSkip,
@@ -333,6 +344,7 @@ function MusicQueueRow({
   item: MusicQueueItem;
   index: number;
   active: boolean;
+  isPinned: boolean;
   onDragStart: (index: number) => void;
   onDrop: (index: number) => void;
   onSkip: (videoId: string) => void;
@@ -516,14 +528,9 @@ function MusicQueueRow({
             }}
           >
             <QueueControlButton
-              label="📍"
-              title="Pin to play next"
-              onClick={() => onPin(item.video_id)}
-            />
-            <QueueControlButton
-              label="📌"
-              title="Unpin from top"
-              onClick={() => onUnpin(item.video_id)}
+              label={isPinned ? '📌' : '📍'}
+              title={isPinned ? 'Unpin from top' : 'Pin to play next'}
+              onClick={isPinned ? () => onUnpin(item.video_id) : () => onPin(item.video_id)}
             />
             <QueueControlButton
               label="⏭"
@@ -573,14 +580,4 @@ function QueueControlButton({
       {label}
     </button>
   );
-}
-
-/** Format seconds as M:SS or H:MM:SS. */
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0)
-    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${m}:${String(s).padStart(2, '0')}`;
 }

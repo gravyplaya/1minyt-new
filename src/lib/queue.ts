@@ -196,6 +196,7 @@ async function getPinnedWatchItems(): Promise<WatchQueueItem[]> {
       published_at: r.published_at,
       score: 1, // pinned items always rank at the top
       reason: '📌 Pinned',
+      is_pinned: true,
     }));
   } finally {
     client.release();
@@ -234,6 +235,7 @@ async function getPinnedMusicItems(): Promise<MusicQueueItem[]> {
       duration_seconds: r.duration_seconds,
       published_at: r.published_at,
       score: 1,
+      is_pinned: true,
     }));
   } finally {
     client.release();
@@ -411,7 +413,7 @@ export async function buildWatchQueue(
       ? Math.max(...rows.map(r => r.raw_score ?? 0), 1e-9)
       : 1;
 
-    const ranked = rows.map(r => ({
+    const ranked: WatchQueueItem[] = rows.map(r => ({
       video_id: r.video_id,
       title: r.title,
       channel_title: r.channel_title,
@@ -420,6 +422,7 @@ export async function buildWatchQueue(
       published_at: r.published_at,
       score: (r.raw_score ?? 0) / maxScore,
       reason: r.reason || 'Trending',
+      is_pinned: false,
     }));
 
     // TAV-61: prepend pinned videos so they survive the force-dynamic re-fetch.
@@ -448,7 +451,11 @@ async function withPinnedWatch(
   // Pinned videos not in the ranked results: prepend them as new rows.
   const pinnedNotInRanked = pinned.filter(p => !rankedIds.has(p.video_id));
   // Ranked results minus the pinned ones we pulled forward (avoid dupes).
-  const rest = ranked.filter(r => !pinnedInRanked.some(p => p.video_id === r.video_id));
+  // Pinned items already in the ranked results are marked is_pinned: true so
+  // the UI can toggle the pin button correctly.
+  const rest = ranked
+    .filter(r => !pinnedInRanked.some(p => p.video_id === r.video_id))
+    .map(r => ({ ...r, is_pinned: false }));
 
   return [...pinnedNotInRanked, ...pinnedInRanked, ...rest].slice(0, Math.max(limit, 1));
 }
@@ -594,7 +601,7 @@ export async function buildMusicQueue(
       ? Math.max(...rows.map(r => r.raw_score ?? 0), 1e-9)
       : 1;
 
-    const ranked = rows.map(r => ({
+    const ranked: MusicQueueItem[] = rows.map(r => ({
       video_id: r.video_id,
       title: r.title,
       channel_title: r.channel_title,
@@ -602,6 +609,7 @@ export async function buildMusicQueue(
       duration_seconds: r.duration_seconds,
       published_at: r.published_at,
       score: (r.raw_score ?? 0) / maxScore,
+      is_pinned: false,
     }));
 
     // TAV-61: prepend pinned tracks so they survive the force-dynamic re-fetch.
@@ -626,7 +634,9 @@ async function withPinnedMusic(
   const rankedIds = new Set(ranked.map(r => r.video_id));
   const pinnedInRanked = pinned.filter(p => rankedIds.has(p.video_id));
   const pinnedNotInRanked = pinned.filter(p => !rankedIds.has(p.video_id));
-  const rest = ranked.filter(r => !pinnedInRanked.some(p => p.video_id === r.video_id));
+  const rest = ranked
+    .filter(r => !pinnedInRanked.some(p => p.video_id === r.video_id))
+    .map(r => ({ ...r, is_pinned: false }));
 
   return [...pinnedNotInRanked, ...pinnedInRanked, ...rest].slice(0, Math.max(limit, 1));
 }

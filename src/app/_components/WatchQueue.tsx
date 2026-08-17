@@ -36,7 +36,7 @@ import {
   pinMultipleToQueueTopAction,
   deferToLaterQueueAction,
 } from '@/app/actions';
-import { formatRelative, youtubeVideoUrl } from '../_lib/format';
+import { formatRelative, formatDuration, youtubeVideoUrl } from '../_lib/format';
 
 /** Number of top queue items to shuffle when the user clicks Shuffle. */
 const SHUFFLE_TOP_N = 5;
@@ -59,10 +59,16 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
   const pendingSeekRef = useRef<number | null>(null);
 
   // TAV-59: local reorderable copy of the queue. Synced from the prop when the
-  // server re-renders (after a revalidate /watch from any server action).
+  // server re-renders (after a revalidate /watch from any server action). Uses
+  // the cancelled-flag pattern (matching the segments effect below) so the
+  // update is synchronous — no microtask window where handleEnded reads a
+  // stale queue[0].
   const [localQueue, setLocalQueue] = useState<WatchQueueItem[]>(queue);
   useEffect(() => {
-    Promise.resolve().then(() => setLocalQueue(queue));
+    let cancelled = false;
+    const incoming = queue;
+    Promise.resolve().then(() => { if (!cancelled) setLocalQueue(incoming); });
+    return () => { cancelled = true; };
   }, [queue]);
 
   // TAV-59: "Up Next" countdown overlay state. When non-null, a countdown is
@@ -104,7 +110,8 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
     if (countdown.remaining <= 0) {
       const id = countdown.videoId;
       // Deferred to a microtask to avoid the react-hooks/set-state-in-effect
-      // cascading-render warning, matching the segments-clear pattern above.
+      // cascading-render warning. The navigation unmounts the component before
+      // the microtask runs, so React swallows the setState — harmless.
       Promise.resolve().then(() => setCountdown(null));
       router.push(`/watch?v=${id}`);
       return;
@@ -174,6 +181,9 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
     const fromIndex = dragIndexRef.current;
     dragIndexRef.current = null;
     if (fromIndex == null || fromIndex === toIndex) return;
+    // Bounds check: a concurrent skip/defer may have shrunk localQueue since
+    // dragstart, leaving dragIndexRef pointing past the end.
+    if (fromIndex >= localQueue.length || toIndex >= localQueue.length) return;
 
     // Optimistic reorder: move the dragged item to its new position.
     const reordered = [...localQueue];
@@ -181,11 +191,12 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
     reordered.splice(toIndex, 0, moved);
     setLocalQueue(reordered);
 
-    // Persist: re-pin the top max(from, to)+1 items in the new order so the
-    // server-side pin order matches the user's drag. This shifts existing pins
-    // down and inserts the batch at positions 0..N-1.
-    const pinCount = Math.max(fromIndex, toIndex) + 1;
-    const pinIds = reordered.slice(0, pinCount).map((q) => q.video_id);
+    // Persist: pin only the affected range [min, max] in the new order so
+    // we don't over-pin items the user never explicitly pinned. The range
+    // between the drag source and destination is all that changed rank.
+    const lo = Math.min(fromIndex, toIndex);
+    const hi = Math.max(fromIndex, toIndex);
+    const pinIds = reordered.slice(lo, hi + 1).map((q) => q.video_id);
     startTransition(async () => {
       await pinMultipleToQueueTopAction(pinIds, 'watch');
       router.refresh();
@@ -437,7 +448,7 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
                 item={item}
                 index={i}
                 active={item.video_id === videoId}
-                isPinned={item.reason === '📌 Pinned'}
+                isPinned={item.is_pinned}
                 onDragStart={handleDragStart}
                 onDrop={handleDrop}
                 onSkip={handleSkip}
@@ -876,14 +887,4 @@ function QueueControlButton({
       {label}
     </button>
   );
-}
-
-/** Format seconds as M:SS or H:MM:SS. */
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0)
-    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${m}:${String(s).padStart(2, '0')}`;
 }

@@ -1200,7 +1200,7 @@ export async function pinMultipleToQueueTopAction(
   }
 }
 
-// ----- TAV-59: Queue controls (skip / unpin / defer / shuffle) -----------------
+// ----- TAV-59: Queue controls (skip / unpin / defer) --------------------------
 
 export interface QueueControlOutcome {
   ok: boolean;
@@ -1209,25 +1209,38 @@ export interface QueueControlOutcome {
   error?: string;
 }
 
+/** Revalidate only the affected queue path (+ inbox for skip/defer). */
+function revalidateQueue(queue: 'watch' | 'music', alsoInbox = false) {
+  revalidatePath(queue === 'watch' ? '/watch' : '/music');
+  if (alsoInbox) revalidatePath('/inbox');
+}
+
 /**
  * Skip a video from the Watch or Music queue. Marks the video as `seen` via
  * `setVideoState` (so the queue query — which excludes `state = 'seen'` —
  * drops it on the next render) and removes any pin so it doesn't reappear at
- * the top after a force-dynamic re-fetch. Revalidates both queue routes so
- * the client sees the updated queue immediately.
+ * the top after a force-dynamic re-fetch. Both mutations run in a single
+ * transaction so a partial failure doesn't leave the video seen-but-still-pinned.
  */
 export async function skipQueueItemAction(
   videoId: string,
   queue: 'watch' | 'music',
 ): Promise<QueueControlOutcome> {
   try {
-    const { setVideoState } = await import('@/lib/inbox');
-    const { unpinFromQueue } = await import('@/lib/queue');
-    await setVideoState(videoId, 'seen');
-    await unpinFromQueue(videoId, queue);
-    revalidatePath('/watch');
-    revalidatePath('/music');
-    revalidatePath('/inbox');
+    const { withTransaction } = await import('@/lib/db');
+    await withTransaction(async (client) => {
+      const now = Math.floor(Date.now() / 1000);
+      // Unpin first so a failure here leaves the video pinned but not yet
+      // marked seen — recoverable, not contradictory.
+      await client.query('DELETE FROM queue_pins WHERE queue = $1 AND video_id = $2', [queue, videoId]);
+      await client.query(
+        `INSERT INTO video_states (video_id, state, updated_at)
+         VALUES ($1, 'seen', $2)
+         ON CONFLICT (video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
+        [videoId, now],
+      );
+    });
+    revalidateQueue(queue, true);
     return { ok: true, videoId, queue };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1247,8 +1260,7 @@ export async function unpinQueueItemAction(
   try {
     const { unpinFromQueue } = await import('@/lib/queue');
     await unpinFromQueue(videoId, queue);
-    revalidatePath('/watch');
-    revalidatePath('/music');
+    revalidateQueue(queue);
     return { ok: true, videoId, queue };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1259,24 +1271,42 @@ export async function unpinQueueItemAction(
 /**
  * "Not now, but later" — dismiss a video from the current playback queue and
  * push it to the existing Summarize Later queue. Enqueues the video for
- * summary (`enqueueForSummary`), marks it `seen` (so it drops out of the
- * Watch/Music queue), and removes any pin. Revalidates all affected routes.
+ * summary, marks it `seen` (so it drops out of the Watch/Music queue), and
+ * removes any pin. All three mutations run in a single transaction so a
+ * partial failure doesn't leave the video in a contradictory state (e.g.
+ * enqueued but still pinned, or seen but not enqueued).
  */
 export async function deferToLaterQueueAction(
   videoId: string,
   queue: 'watch' | 'music',
 ): Promise<QueueControlOutcome> {
   try {
-    const { enqueueForSummary } = await import('@/lib/summarize-queue');
-    const { setVideoState } = await import('@/lib/inbox');
-    const { unpinFromQueue } = await import('@/lib/queue');
-    await enqueueForSummary(videoId);
-    await setVideoState(videoId, 'seen');
-    await unpinFromQueue(videoId, queue);
-    revalidatePath('/watch');
-    revalidatePath('/music');
+    const { withTransaction } = await import('@/lib/db');
+    const { newId } = await import('@/lib/id');
+    await withTransaction(async (client) => {
+      const now = Math.floor(Date.now() / 1000);
+      // Enqueue for summary (idempotent upsert, matching enqueueForSummary).
+      await client.query(
+        `INSERT INTO summarize_queue (id, video_id, state, queued_at, summarized_at, created_at)
+         VALUES ($1, $2, 'queued', $3, NULL, $3)
+         ON CONFLICT (video_id) DO UPDATE SET
+          state = 'queued',
+          queued_at = excluded.queued_at,
+          summarized_at = NULL`,
+        [newId(), videoId, now],
+      );
+      // Unpin so it doesn't reappear at the top of the playback queue.
+      await client.query('DELETE FROM queue_pins WHERE queue = $1 AND video_id = $2', [queue, videoId]);
+      // Mark seen so the queue query drops it.
+      await client.query(
+        `INSERT INTO video_states (video_id, state, updated_at)
+         VALUES ($1, 'seen', $2)
+         ON CONFLICT (video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
+        [videoId, now],
+      );
+    });
+    revalidateQueue(queue, true);
     revalidatePath('/summarize-later');
-    revalidatePath('/inbox');
     return { ok: true, videoId, queue };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

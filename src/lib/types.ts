@@ -362,6 +362,14 @@ export interface WatchQueueItem {
   score: number;
   /** Short string explaining why the video is ranked, e.g. "Never watched · 2 topic matches". */
   reason: string;
+  /**
+   * TAV-59: Whether this item was explicitly pinned to the top via
+   * `queue_pins`. Populated by the build functions which already join
+   * `queue_pins`. The `reason` string is display-only and must not be used
+   * as a pin-state flag — this boolean is the source of truth for the
+   * pin/unpin toggle.
+   */
+  is_pinned: boolean;
 }
 
 // ----- TAV-55: Music queue ---------------------------------------------------
@@ -382,6 +390,12 @@ export interface MusicQueueItem {
   published_at: number | null;
   /** Normalised relevance score (0–1). Higher = more relevant. */
   score: number;
+  /**
+   * TAV-59: Whether this item was explicitly pinned to the top via
+   * `queue_pins`. Populated by the build function which already joins
+   * `queue_pins`. Source of truth for the pin/unpin toggle.
+   */
+  is_pinned: boolean;
 }
 
 // ----- TAV-26: Curated channel playlists -------------------------------------

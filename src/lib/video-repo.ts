@@ -286,11 +286,25 @@ export async function getVideoWithSummary(videoId: string): Promise<VideoWithSum
   }
 }
 
-export async function listVideosByChannel(channelId: string, limit = 30): Promise<VideoWithSummary[]> {
+export async function listVideosByChannel(
+  channelId: string,
+  limit = 30,
+  options?: { excludeSeen?: boolean },
+): Promise<VideoWithSummary[]> {
+  const excludeSeen = options?.excludeSeen ?? false;
   const client = await getDb();
   try {
+    // TAV-63: when `excludeSeen` is set, skip videos the user has already
+    // triaged as 'seen' in the inbox. The channel page uses this so the
+    // "Queue this channel" button pins unwatched videos only (the TAV-61
+    // spec says "N most-recent unwatched videos"). The LEFT JOIN keeps
+    // pre-triage videos (no video_states row) — only `state = 'seen'`
+    // rows are excluded.
+    const seenClause = excludeSeen
+      ? 'LEFT JOIN video_states vs ON vs.video_id = videos.video_id WHERE videos.channel_id = $1 AND (vs.state IS NULL OR vs.state <> \'seen\')'
+      : 'WHERE videos.channel_id = $1';
     const { rows } = await client.query<VideoRow>(
-      'SELECT * FROM videos WHERE channel_id = $1 ORDER BY published_at DESC LIMIT $2',
+      `SELECT videos.* FROM videos ${seenClause} ORDER BY videos.published_at DESC LIMIT $2`,
       [channelId, limit],
     );
     if (rows.length === 0) return [];

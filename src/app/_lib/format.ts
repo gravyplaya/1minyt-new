@@ -47,6 +47,16 @@ export function youtubePlaylistUrl(playlistId: string): string {
   return `https://www.youtube.com/playlist?list=${playlistId}`;
 }
 
+/** Format seconds as M:SS or H:MM:SS. Shared between WatchQueue and MusicQueue. */
+export function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0)
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 /** Parse an ISO-8601 duration like "PT1H2M3S" into seconds. Returns null on failure. */
 export function parseIso8601Duration(iso: string | null | undefined): number | null {
   if (!iso) return null;
