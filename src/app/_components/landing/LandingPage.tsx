@@ -4,15 +4,57 @@ import { useEffect, useRef } from "react";
 import "./landing.css";
 
 const features = [
+  // ── New: The Intelligent Queue ──
+  {
+    icon: "▶",
+    title: "Intelligent Queue",
+    desc: "Stop re-watching the same videos. Our queue ranks what's next using your subscriptions, play history, summary topics, and reference graph — not YouTube's global average.",
+  },
+  {
+    icon: "⏭",
+    title: "Autoplay That Respects You",
+    desc: "When a video ends, the next one loads with a 5-second countdown you can dismiss. The choice is transparent and editable — not a black box optimizing someone else's watch time.",
+  },
+  {
+    icon: "🎬",
+    title: "Watch Tab",
+    desc: "A player-first surface: full-width 16:9 player, a Now Playing panel with summaries, chapters, chat, and references, plus an Up Next queue you control.",
+  },
+  {
+    icon: "🎵",
+    title: "Music Tab",
+    desc: "A dedicated listening surface for music channels. Audio-first — no transcripts, no chat, no summaries. Just your tracks, queued by what you actually listen to.",
+  },
+  {
+    icon: "🔗",
+    title: "Reference Graph Queue",
+    desc: "Your summaries cite each other — a private knowledge graph of what your subscriptions collectively think matters. Turn those citations into an instant themed queue.",
+  },
+  {
+    icon: "🎛",
+    title: "Queue Controls",
+    desc: "Drag to reorder. Skip what you don't want. Pin a video to play next. Shuffle for serendipity. Push to Summarize Later. The queue is yours.",
+  },
+  // ── Existing workflow ──
   {
     icon: "📥",
     title: "Smart Inbox",
-    desc: "New videos from your subscriptions land in a dedicated inbox. Filter, sort, and triage what's worth your time.",
+    desc: "New videos from your subscriptions land in a dedicated inbox. Filter, sort, and triage what's worth your time — then send straight to your Watch queue.",
+  },
+  {
+    icon: "📋",
+    title: "Weekly Digests",
+    desc: "Generate digests that condense your recent subscriptions into a single readable briefing.",
   },
   {
     icon: "✦",
     title: "AI Summaries",
     desc: "One-click summaries extract the key points from any video. Save the gist without watching the whole thing.",
+  },
+  {
+    icon: "★",
+    title: "Saved Summaries",
+    desc: "Star important summaries for quick access. Your personal knowledge base of video insights.",
   },
   {
     icon: "🔍",
@@ -25,24 +67,14 @@ const features = [
     desc: "Ask questions about a video and get answers grounded in the transcript, with timestamp citations.",
   },
   {
-    icon: "🔖",
-    title: "Summarize Later Queue",
-    desc: "Bookmark videos for later summarization. Build your reading list, then process them in batches.",
-  },
-  {
-    icon: "📋",
-    title: "Weekly Digests",
-    desc: "Generate digests that condense your recent subscriptions into a single readable briefing.",
-  },
-  {
     icon: "🗂",
     title: "Folders & Tags",
     desc: "Organize channels into folders and tag them for cross-cutting views. Filter music channels automatically.",
   },
   {
-    icon: "★",
-    title: "Saved Summaries",
-    desc: "Star important summaries for quick access. Your personal knowledge base of video insights.",
+    icon: "🔖",
+    title: "Summarize Later Queue",
+    desc: "Bookmark videos for later summarization. Build your reading list, then process them in batches.",
   },
   {
     icon: "📊",
@@ -58,24 +90,36 @@ const features = [
 
 const stackCards = [
   {
-    title: "Never miss what matters",
-    items: [features[0], features[5]],
+    title: "Your autoplay, finally",
+    items: [features[0], features[1]],
   },
   {
-    title: "Understand videos in minutes",
-    items: [features[1], features[7]],
-  },
-  {
-    title: "Find anything, ask anything",
+    title: "Two ways to play",
     items: [features[2], features[3]],
   },
   {
+    title: "Discovery from your own graph",
+    items: [features[4], features[5]],
+  },
+  {
+    title: "Never miss what matters",
+    items: [features[6], features[7]],
+  },
+  {
+    title: "Understand videos in minutes",
+    items: [features[8], features[9]],
+  },
+  {
+    title: "Find anything, ask anything",
+    items: [features[10], features[11]],
+  },
+  {
     title: "Your library, your system",
-    items: [features[6], features[4]],
+    items: [features[12], features[13]],
   },
   {
     title: "Plug into your workflow",
-    items: [features[8], features[9]],
+    items: [features[14], features[15]],
   },
 ];
 
@@ -211,17 +255,18 @@ export function LandingPage() {
         <div className="landing-hero-content">
           <div className="landing-badge">
             <span className="landing-badge-dot" />
-            Your YouTube, organized
+            Your YouTube, finally your autoplay
           </div>
           <h1 className="landing-h1">
-            Tame your YouTube
+            The YouTube player
             <br />
-            <span className="landing-h1-gradient">subscription chaos</span>
+            <span className="landing-h1-gradient">that knows what you watch</span>
           </h1>
           <p className="landing-sub">
             Connect your YouTube account once. 1minyt pulls your subscriptions,
             summarizes videos with AI, lets you search every transcript, and
-            organizes everything with folders, tags, and digests.
+            builds an Intelligent Queue that ranks what to play next using your
+            own attention data — not YouTube&apos;s global average.
           </p>
           <div className="landing-cta-row">
             <a
@@ -251,30 +296,35 @@ export function LandingPage() {
                     <span className="landing-dot" />
                     <span className="landing-dot" />
                     <span className="landing-mockup-title">
-                      1minyt — Smart Inbox
+                      1minyt — Watch
                     </span>
                   </div>
                   <div className="landing-mockup-body">
                     <div className="landing-mockup-side">
+                      <div className="landing-mockup-side-item">
+                        📺 Channels
+                      </div>
                       <div className="landing-mockup-side-item is-active">
-                        📥 Inbox
+                        ▶ Watch <span className="landing-mockup-badge">12</span>
                       </div>
                       <div className="landing-mockup-side-item">
-                        ✦ Summaries
+                        🎵 Music <span className="landing-mockup-badge">8</span>
                       </div>
-                      <div className="landing-mockup-side-item">🔍 Search</div>
-                      <div className="landing-mockup-side-label">Folders</div>
-                      <div className="landing-mockup-side-item">🗂 Tech</div>
-                      <div className="landing-mockup-side-item">🗂 Science</div>
+                      <div className="landing-mockup-side-item">
+                        📥 Inbox <span className="landing-mockup-badge">5</span>
+                      </div>
+                      <div className="landing-mockup-side-item">🗂 Library</div>
                     </div>
                     <div className="landing-mockup-feed">
                       {mockThumbs.map((g, i) => (
                         <div key={g}>
-                          <div className="landing-mockup-row">
+                          <div className={`landing-mockup-row${i === 0 ? " is-playing" : ""}`}>
                             <div
-                              className="landing-mockup-thumb"
+                              className={`landing-mockup-thumb${i === 0 ? " is-now-playing" : ""}`}
                               style={{ background: g }}
-                            />
+                            >
+                              {i === 0 && <span className="landing-mockup-play">▶</span>}
+                            </div>
                             <div className="landing-mockup-lines">
                               <div
                                 className="landing-mockup-line"
@@ -286,9 +336,14 @@ export function LandingPage() {
                               />
                             </div>
                           </div>
-                          {i === 1 && (
+                          {i === 0 && (
+                            <div className="landing-mockup-upnext">
+                              ⏭ Up next in 5s · dismiss to keep watching
+                            </div>
+                          )}
+                          {i === 2 && (
                             <div className="landing-mockup-summary">
-                              ✦ Key points extracted · 3 min read
+                              🔗 Cited by 2 of your saved summaries
                             </div>
                           )}
                         </div>
@@ -297,10 +352,10 @@ export function LandingPage() {
                   </div>
                 </div>
                 <div className="landing-chip-float landing-chip-1">
-                  ✦ Summary ready — 3 key points
+                  ⏭ Up next: 12 videos ranked for you
                 </div>
                 <div className="landing-chip-float landing-chip-2">
-                  🔍 1,204 transcripts indexed
+                  🔗 6 videos cited by your summaries
                 </div>
               </div>
             </div>
@@ -311,9 +366,9 @@ export function LandingPage() {
       {/* Stats strip */}
       <section className="landing-stats">
         {[
-          { label: "AI summaries", value: "One click" },
-          { label: "Transcript search", value: "Every word" },
-          { label: "Organization", value: "Folders + tags" },
+          { label: "Intelligent Queue", value: "Your data" },
+          { label: "Autoplay control", value: "5s countdown" },
+          { label: "Reference graph", value: "Cite → play" },
         ].map((s, i) => (
           <div
             key={s.label}
@@ -329,7 +384,7 @@ export function LandingPage() {
       {/* Feature stack */}
       <section className="landing-stack-section" id="features">
         <h2 className="landing-section-kicker landing-reveal">
-          Everything you need to actually use your subscriptions
+          A player that ranks what you watch, not what YouTube wants you to watch
         </h2>
         <div>
           {stackCards.map((card, i) => (
@@ -365,10 +420,10 @@ export function LandingPage() {
 
       {/* Final CTA */}
       <section className="landing-final landing-reveal">
-        <h2>Ready to get started?</h2>
+        <h2>Ready to watch your way?</h2>
         <p>
-          Connect your YouTube account in seconds. No credit card, no
-          commitment.
+          Connect your YouTube account in seconds. Get an Intelligent Queue
+          that actually knows what you&apos;ve seen — and what&apos;s next.
         </p>
         <a
           className="btn btn-primary landing-btn-lg landing-btn-shine"
