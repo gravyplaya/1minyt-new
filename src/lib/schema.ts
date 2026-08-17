@@ -398,6 +398,12 @@ export const SCHEMA_STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_video_history_last_played ON video_play_history(last_played_at DESC)`,
 
+  // TAV-41: additive columns on video_play_history. The table predates these
+  // columns, and CREATE TABLE IF NOT EXISTS won't add them to an existing table,
+  // so ALTER is required for already-provisioned databases.
+  `ALTER TABLE video_play_history ADD COLUMN IF NOT EXISTS last_progress_seconds INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE video_play_history ADD COLUMN IF NOT EXISTS completed INTEGER NOT NULL DEFAULT 0`,
+
   // ----- TAV-61: Pinned videos for the Watch/Music queue ----------------------
   //
   // One row per pinned video on a given queue surface. `queue` is 'watch' or
