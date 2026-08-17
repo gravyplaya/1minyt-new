@@ -1,0 +1,890 @@
+'use client';
+
+/**
+ * TAV-56 + TAV-59: Watch page client component.
+ *
+ * TAV-56 built the two-panel layout (Now Playing | Up Next).
+ * TAV-59 adds:
+ *   - Autoplay: onEnded fires a 5-second "Up Next" countdown overlay the
+ *     user can dismiss. When the countdown reaches 0, navigate to the next
+ *     queue item (`/watch?v=<video_id>`).
+ *   - Queue controls: drag-to-reorder (HTML5 DnD → re-pin in new order),
+ *     skip (marks `seen`), pin (lock to top via pinToQueueTopAction),
+ *     shuffle (randomize top N → pinMultipleToQueueTopAction), and
+ *     "Not now, but later" (push to Summarize Later queue).
+ *
+ * The server component (src/app/watch/page.tsx) calls buildWatchQueue(20) and
+ * fetches the full VideoWithSummary for the "now playing" video, then passes
+ * both as props. The page is force-dynamic, so server actions that revalidate
+ * /watch cause the server to re-render with the updated queue (pinned items
+ * prepended, skipped items removed).
+ */
+
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useRef, useState, useEffect, useTransition } from 'react';
+import type { TranscriptSegment, VideoWithSummary, WatchQueueItem } from '@/lib/types';
+import { YouTubePlayer, type YouTubePlayerHandle } from './YouTubePlayer';
+import { SummaryBody } from './VideoSummaryRow';
+import { VideoChatPanel } from './VideoChatPanel';
+import { VideoReferencesSection } from './VideoReferencesSection';
+import {
+  getSegmentsAction,
+  skipQueueItemAction,
+  unpinQueueItemAction,
+  pinToQueueTopAction,
+  pinMultipleToQueueTopAction,
+  deferToLaterQueueAction,
+} from '@/app/actions';
+import { formatRelative, formatDuration, youtubeVideoUrl } from '../_lib/format';
+
+/** Number of top queue items to shuffle when the user clicks Shuffle. */
+const SHUFFLE_TOP_N = 5;
+
+/** Countdown duration in seconds for the Watch "Up Next" overlay. */
+const UP_NEXT_COUNTDOWN_SECONDS = 5;
+
+export interface WatchQueueProps {
+  /** Ranked candidate videos from buildWatchQueue(20), excluding now-playing. */
+  queue: WatchQueueItem[];
+  /** Full hydrated video row for the "now playing" video. */
+  nowPlaying: VideoWithSummary;
+}
+
+export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
+  const videoId = nowPlaying.video_id;
+  const router = useRouter();
+  const [chatOpen, setChatOpen] = useState(false);
+  const playerHandleRef = useRef<YouTubePlayerHandle | null>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+
+  // TAV-59: local reorderable copy of the queue. Synced from the prop when the
+  // server re-renders (after a revalidate /watch from any server action). Uses
+  // the cancelled-flag pattern (matching the segments effect below) so the
+  // update is synchronous — no microtask window where handleEnded reads a
+  // stale queue[0].
+  const [localQueue, setLocalQueue] = useState<WatchQueueItem[]>(queue);
+  useEffect(() => {
+    let cancelled = false;
+    const incoming = queue;
+    Promise.resolve().then(() => { if (!cancelled) setLocalQueue(incoming); });
+    return () => { cancelled = true; };
+  }, [queue]);
+
+  // TAV-59: "Up Next" countdown overlay state. When non-null, a countdown is
+  // ticking down from UP_NEXT_COUNTDOWN_SECONDS. At 0, we navigate to the
+  // next video. Dismiss sets it to null.
+  const [countdown, setCountdown] = useState<{
+    videoId: string;
+    title: string;
+    thumbnail: string | null;
+    channel: string;
+    remaining: number;
+  } | null>(null);
+
+  const [, startTransition] = useTransition();
+
+  // Fetch transcript segments for the "now playing" highlight when the video
+  // changes. Best-effort — empty segments just hides the highlight. The
+  // synchronous `setSegments([])` reset is deferred to a microtask to avoid
+  // the react-hooks/set-state-in-effect cascading-render warning, matching the
+  // pattern YouTubePlayer.tsx uses internally for the same reason.
+  const segmentsKey = videoId;
+  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    // Clear stale segments for the new video on the next tick (not synchronously
+    // in the effect body) so React doesn't warn about cascading renders.
+    Promise.resolve().then(() => { if (!cancelled) setSegments([]); });
+    (async () => {
+      const segs = await getSegmentsAction(segmentsKey);
+      if (!cancelled && segs.length > 0) setSegments(segs);
+    })();
+    return () => { cancelled = true; };
+  }, [segmentsKey]);
+
+  // TAV-59: countdown ticker. Fires every 1s while the countdown is active.
+  // When remaining hits 0, navigate to the next video and clear the overlay.
+  useEffect(() => {
+    if (!countdown) return;
+    if (countdown.remaining <= 0) {
+      const id = countdown.videoId;
+      // Deferred to a microtask to avoid the react-hooks/set-state-in-effect
+      // cascading-render warning. The navigation unmounts the component before
+      // the microtask runs, so React swallows the setState — harmless.
+      Promise.resolve().then(() => setCountdown(null));
+      router.push(`/watch?v=${id}`);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      Promise.resolve().then(() => {
+        setCountdown((c) => c ? { ...c, remaining: c.remaining - 1 } : null);
+      });
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [countdown, router]);
+
+  // Seek handler passed to SummaryBody (chapters) and VideoChatPanel
+  // (citations): jumps the player if mounted, otherwise defers until onReady.
+  const handleSeek = (seconds: number) => {
+    if (playerHandleRef.current) {
+      playerHandleRef.current.seekTo(seconds);
+    } else {
+      pendingSeekRef.current = seconds;
+    }
+  };
+
+  const onPlayerReady = (handle: YouTubePlayerHandle) => {
+    playerHandleRef.current = handle;
+    if (pendingSeekRef.current != null) {
+      handle.seekTo(pendingSeekRef.current);
+      pendingSeekRef.current = null;
+    }
+  };
+
+  // TAV-59: autoplay — when the player fires onEnded, look at the top of the
+  // local queue. If there's a next video, start the 5-second countdown overlay.
+  // If the queue is empty, do nothing (the video just ends).
+  const handleEnded = () => {
+    const next = localQueue[0];
+    if (!next) return;
+    setCountdown({
+      videoId: next.video_id,
+      title: next.title,
+      thumbnail: next.thumbnail_url,
+      channel: next.channel_title,
+      remaining: UP_NEXT_COUNTDOWN_SECONDS,
+    });
+  };
+
+  // TAV-59: dismiss the countdown overlay (user clicked "Cancel" or navigated away).
+  const dismissCountdown = () => setCountdown(null);
+
+  // TAV-59: skip the countdown and play the next video immediately.
+  const playNextNow = () => {
+    if (!countdown) return;
+    const id = countdown.videoId;
+    setCountdown(null);
+    router.push(`/watch?v=${id}`);
+  };
+
+  // TAV-59: drag-to-reorder. When a row is dragged from `from` to `to`, reorder
+  // the local queue optimistically and persist the new order via
+  // pinMultipleToQueueTopAction (re-pins the affected top N in the new order).
+  const dragIndexRef = useRef<number | null>(null);
+
+  const handleDragStart = (index: number) => {
+    dragIndexRef.current = index;
+  };
+
+  const handleDrop = (toIndex: number) => {
+    const fromIndex = dragIndexRef.current;
+    dragIndexRef.current = null;
+    if (fromIndex == null || fromIndex === toIndex) return;
+    // Bounds check: a concurrent skip/defer may have shrunk localQueue since
+    // dragstart, leaving dragIndexRef pointing past the end.
+    if (fromIndex >= localQueue.length || toIndex >= localQueue.length) return;
+
+    // Optimistic reorder: move the dragged item to its new position.
+    const reordered = [...localQueue];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+    setLocalQueue(reordered);
+
+    // Persist: pin only the affected range [min, max] in the new order so
+    // we don't over-pin items the user never explicitly pinned. The range
+    // between the drag source and destination is all that changed rank.
+    const lo = Math.min(fromIndex, toIndex);
+    const hi = Math.max(fromIndex, toIndex);
+    const pinIds = reordered.slice(lo, hi + 1).map((q) => q.video_id);
+    startTransition(async () => {
+      await pinMultipleToQueueTopAction(pinIds, 'watch');
+      router.refresh();
+    });
+  };
+
+  // TAV-59: shuffle the top N queue items. Reorders locally and persists via
+  // pinMultipleToQueueTopAction with the shuffled order.
+  const handleShuffle = () => {
+    if (localQueue.length < 2) return;
+    const n = Math.min(SHUFFLE_TOP_N, localQueue.length);
+    const topN = localQueue.slice(0, n);
+    const rest = localQueue.slice(n);
+
+    // Fisher-Yates shuffle on the top N.
+    for (let i = topN.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [topN[i], topN[j]] = [topN[j], topN[i]];
+    }
+
+    const shuffled = [...topN, ...rest];
+    setLocalQueue(shuffled);
+
+    startTransition(async () => {
+      await pinMultipleToQueueTopAction(topN.map((q) => q.video_id), 'watch');
+      router.refresh();
+    });
+  };
+
+  // TAV-59: skip a video from the queue (marks as seen, removes pin).
+  // Optimistically removes it from the local queue, then fires the server action.
+  const handleSkip = (videoId: string) => {
+    setLocalQueue((q) => q.filter((item) => item.video_id !== videoId));
+    // Also clear countdown if it was showing this video.
+    setCountdown((c) => c?.videoId === videoId ? null : c);
+    startTransition(async () => {
+      await skipQueueItemAction(videoId, 'watch');
+      router.refresh();
+    });
+  };
+
+  // TAV-59: pin a video to the top of the queue.
+  const handlePin = (videoId: string) => {
+    startTransition(async () => {
+      await pinToQueueTopAction(videoId, 'watch');
+      router.refresh();
+    });
+  };
+
+  // TAV-59: unpin a video (remove its pin without marking as seen).
+  const handleUnpin = (videoId: string) => {
+    startTransition(async () => {
+      await unpinQueueItemAction(videoId, 'watch');
+      router.refresh();
+    });
+  };
+
+  // TAV-59: "Not now, but later" — push to Summarize Later queue.
+  const handleDefer = (videoId: string) => {
+    setLocalQueue((q) => q.filter((item) => item.video_id !== videoId));
+    setCountdown((c) => c?.videoId === videoId ? null : c);
+    startTransition(async () => {
+      await deferToLaterQueueAction(videoId, 'watch');
+      router.refresh();
+    });
+  };
+
+  const hasSummary = Boolean(nowPlaying.summary);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Full-width 16:9 player with countdown overlay */}
+      <div style={{ position: 'relative' }}>
+        <YouTubePlayer
+          key={videoId}
+          videoId={videoId}
+          segments={segments}
+          onReady={onPlayerReady}
+          onEnded={handleEnded}
+        />
+        {/* TAV-59: "Up Next" countdown overlay */}
+        {countdown && (
+          <UpNextCountdown
+            title={countdown.title}
+            thumbnail={countdown.thumbnail}
+            channel={countdown.channel}
+            remaining={countdown.remaining}
+            onPlayNow={playNextNow}
+            onDismiss={dismissCountdown}
+          />
+        )}
+      </div>
+
+      {/* Two-panel layout: Now Playing | Up Next */}
+      <div
+        className="watch-panels"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) 340px',
+          gap: 24,
+          alignItems: 'start',
+        }}
+      >
+        {/* Left: Now Playing panel */}
+        <div className="watch-now-playing" style={{ minWidth: 0 }}>
+          <h1
+            style={{
+              fontSize: 20,
+              fontWeight: 700,
+              marginBottom: 4,
+              color: '#e7e7ea',
+              lineHeight: 1.3,
+            }}
+          >
+            {nowPlaying.title}
+          </h1>
+          <div
+            style={{
+              color: '#8b8b94',
+              fontSize: 13,
+              marginBottom: 16,
+              display: 'flex',
+              gap: 10,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
+            {nowPlaying.duration_seconds != null && (
+              <span>{formatDuration(nowPlaying.duration_seconds)}</span>
+            )}
+            {nowPlaying.published_at && (
+              <span>{formatRelative(nowPlaying.published_at)}</span>
+            )}
+            <a
+              href={youtubeVideoUrl(videoId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#5b9eff', textDecoration: 'none' }}
+            >
+              Open on YouTube ↗
+            </a>
+          </div>
+
+          {/* Summary body — reuses the same SummaryBody component from
+              VideoSummaryRow. Only renders when a summary exists. */}
+          {hasSummary && nowPlaying.summary && (
+            <div
+              style={{
+                border: '1px solid #2a2a33',
+                borderRadius: 12,
+                background: '#15151a',
+                padding: '14px 16px',
+                marginBottom: 16,
+              }}
+            >
+              <SummaryBody
+                summary={nowPlaying.summary}
+                videoId={videoId}
+                chapters={nowPlaying.chapters}
+                communityPulse={nowPlaying.community_pulse}
+                onSeek={handleSeek}
+              />
+            </div>
+          )}
+
+          {/* Chat with video panel */}
+          <div
+            style={{
+              border: '1px solid #2a2a33',
+              borderRadius: 12,
+              background: '#15151a',
+              overflow: 'hidden',
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setChatOpen((o) => !o)}
+              disabled={nowPlaying.transcript_status === 'unavailable'}
+              title="Chat with this video"
+              style={{
+                fontSize: 13,
+                padding: '10px 14px',
+                width: '100%',
+                textAlign: 'left',
+                borderBottom: chatOpen ? '1px solid #2a2a33' : 'none',
+              }}
+            >
+              {chatOpen ? '▼ Close chat' : '▶ Chat with this video'}
+            </button>
+            {chatOpen && (
+              <div style={{ padding: '0 14px 14px' }}>
+                <VideoChatPanel videoId={videoId} onSeek={handleSeek} />
+              </div>
+            )}
+          </div>
+
+          {/* References section — self-contained, fetches its own data */}
+          <div style={{ marginTop: 16 }}>
+            <VideoReferencesSection videoId={videoId} />
+          </div>
+        </div>
+
+        {/* Right: Up Next queue with TAV-59 controls */}
+        <aside
+          className="watch-up-next"
+          style={{
+            position: 'sticky',
+            top: 16,
+            maxHeight: 'calc(100vh - 32px)',
+            overflowY: 'auto',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 12,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#e7e7ea',
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+              }}
+            >
+              Up Next · {localQueue.length}
+            </div>
+            {/* TAV-59: Shuffle button */}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={handleShuffle}
+              disabled={localQueue.length < 2}
+              title="Shuffle the top 5"
+              style={{ fontSize: 11, padding: '3px 8px' }}
+            >
+              🔀 Shuffle
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {localQueue.map((item, i) => (
+              <WatchQueueRow
+                key={item.video_id}
+                item={item}
+                index={i}
+                active={item.video_id === videoId}
+                isPinned={item.is_pinned}
+                onDragStart={handleDragStart}
+                onDrop={handleDrop}
+                onSkip={handleSkip}
+                onPin={handlePin}
+                onUnpin={handleUnpin}
+                onDefer={handleDefer}
+              />
+            ))}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * TAV-59: "Up Next" countdown overlay. Renders on top of the player when a
+ * video ends. Shows the next video's thumbnail + title with a countdown
+ * from UP_NEXT_COUNTDOWN_SECONDS. Two actions: "Play now" (skip countdown)
+ * and "Cancel" (dismiss overlay, stop autoplay).
+ */
+function UpNextCountdown({
+  title,
+  thumbnail,
+  channel,
+  remaining,
+  onPlayNow,
+  onDismiss,
+}: {
+  title: string;
+  thumbnail: string | null;
+  channel: string;
+  remaining: number;
+  onPlayNow: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        bottom: 60,
+        right: 16,
+        width: 300,
+        background: 'rgba(15, 15, 20, 0.95)',
+        border: '1px solid rgba(91, 158, 255, 0.35)',
+        borderRadius: 12,
+        padding: 12,
+        zIndex: 10,
+        backdropFilter: 'blur(8px)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: '#5b9eff',
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+          }}
+        >
+          Up Next in {remaining}s
+        </span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Cancel autoplay"
+          style={{
+            marginLeft: 'auto',
+            background: 'none',
+            border: 'none',
+            color: '#8b8b94',
+            cursor: 'pointer',
+            fontSize: 16,
+            padding: '0 4px',
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+        {thumbnail ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={thumbnail}
+            alt={title}
+            style={{
+              width: 100,
+              height: 56,
+              objectFit: 'cover',
+              borderRadius: 6,
+              background: '#1f1f26',
+              flexShrink: 0,
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              width: 100,
+              height: 56,
+              borderRadius: 6,
+              background: '#1f1f26',
+              flexShrink: 0,
+            }}
+          />
+          )}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#e7e7ea',
+              lineHeight: 1.3,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+            }}
+          >
+            {title}
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: '#8b8b94',
+              marginTop: 2,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {channel}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={onPlayNow}
+          style={{ fontSize: 12, padding: '5px 12px', flex: 1 }}
+        >
+          ▶ Play now
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={onDismiss}
+          style={{ fontSize: 12, padding: '5px 12px' }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A single queue row with TAV-59 controls. Draggable for reorder; has Skip,
+ * Pin/Unpin, and "Not now, but later" buttons.
+ */
+function WatchQueueRow({
+  item,
+  index,
+  active,
+  isPinned,
+  onDragStart,
+  onDrop,
+  onSkip,
+  onPin,
+  onUnpin,
+  onDefer,
+}: {
+  item: WatchQueueItem;
+  index: number;
+  active: boolean;
+  isPinned: boolean;
+  onDragStart: (index: number) => void;
+  onDrop: (index: number) => void;
+  onSkip: (videoId: string) => void;
+  onPin: (videoId: string) => void;
+  onUnpin: (videoId: string) => void;
+  onDefer: (videoId: string) => void;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+
+  return (
+    <Link
+      href={`/watch?v=${item.video_id}`}
+      style={{ textDecoration: 'none' }}
+      aria-label={`Play ${item.title}`}
+      draggable
+      onDragStart={() => onDragStart(index)}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => { e.preventDefault(); setDragOver(false); onDrop(index); }}
+    >
+      <div
+        className="watch-queue-row"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '120px 1fr',
+          gap: 10,
+          padding: 8,
+          borderRadius: 10,
+          border: dragOver
+            ? '1px solid #5b9eff'
+            : active
+              ? '1px solid rgba(91,158,255,0.4)'
+              : '1px solid #2a2a33',
+          background: dragOver
+            ? 'rgba(91,158,255,0.1)'
+            : active
+              ? 'rgba(91,158,255,0.06)'
+              : '#15151a',
+          cursor: 'pointer',
+          transition: 'background .12s ease, border-color .12s ease',
+        }}
+        onMouseEnter={(e) => {
+          if (!active && !dragOver) {
+            (e.currentTarget as HTMLDivElement).style.background = '#1a1a20';
+            (e.currentTarget as HTMLDivElement).style.borderColor = '#3a3a44';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!active && !dragOver) {
+            (e.currentTarget as HTMLDivElement).style.background = '#15151a';
+            (e.currentTarget as HTMLDivElement).style.borderColor = '#2a2a33';
+          }
+        }}
+      >
+        {/* Thumbnail */}
+        <div style={{ position: 'relative' }}>
+          {item.thumbnail_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={item.thumbnail_url}
+              alt={item.title}
+              style={{
+                width: 120,
+                height: 68,
+                objectFit: 'cover',
+                borderRadius: 6,
+                background: '#1f1f26',
+                display: 'block',
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 120,
+                height: 68,
+                borderRadius: 6,
+                background: '#1f1f26',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#5a5a64',
+                fontSize: 11,
+              }}
+            >
+              no thumb
+            </div>
+          )}
+          {/* Rank badge */}
+          <span
+            style={{
+              position: 'absolute',
+              top: 4,
+              left: 4,
+              background: 'rgba(0,0,0,0.75)',
+              color: '#e7e7ea',
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '1px 5px',
+              borderRadius: 4,
+              fontFamily: 'monospace',
+            }}
+          >
+            {index + 1}
+          </span>
+          {item.duration_seconds != null && (
+            <span
+              style={{
+                position: 'absolute',
+                bottom: 4,
+                right: 4,
+                background: 'rgba(0,0,0,0.8)',
+                color: '#e7e7ea',
+                fontSize: 10,
+                padding: '1px 4px',
+                borderRadius: 3,
+                fontFamily: 'monospace',
+              }}
+            >
+              {formatDuration(item.duration_seconds)}
+            </span>
+          )}
+        </div>
+
+        {/* Details */}
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              color: active ? '#cfe4ff' : '#e7e7ea',
+              fontSize: 13,
+              fontWeight: 600,
+              lineHeight: 1.3,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+            }}
+          >
+            {item.title}
+          </div>
+          <div
+            style={{
+              color: '#8b8b94',
+              fontSize: 11,
+              marginTop: 2,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {item.channel_title}
+            {item.published_at && ` · ${formatRelative(item.published_at)}`}
+          </div>
+
+          {/* Score bar */}
+          <div
+            style={{
+              marginTop: 6,
+              height: 3,
+              borderRadius: 999,
+              background: '#2a2a33',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: `${Math.round(item.score * 100)}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, #5b9eff, #7db5ff)',
+                borderRadius: 999,
+              }}
+            />
+          </div>
+
+          {/* Reason string */}
+          {item.reason && (
+            <div
+              style={{
+                color: '#7db5ff',
+                fontSize: 11,
+                marginTop: 4,
+                fontStyle: 'italic',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {item.reason}
+            </div>
+          )}
+
+          {/* TAV-59: Queue control buttons */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 4,
+              marginTop: 6,
+            }}
+          >
+            <QueueControlButton
+              label={isPinned ? '📌' : '📍'}
+              title={isPinned ? 'Unpin from top' : 'Pin to play next'}
+              onClick={isPinned ? () => onUnpin(item.video_id) : () => onPin(item.video_id)}
+            />
+            <QueueControlButton
+              label="⏭"
+              title="Skip (remove from queue)"
+              onClick={() => onSkip(item.video_id)}
+            />
+            <QueueControlButton
+              label="⏰"
+              title="Not now, but later (add to Summarize Later)"
+              onClick={() => onDefer(item.video_id)}
+            />
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+/** Compact icon button for queue row controls. Stops propagation so the row's
+ *  Link navigation doesn't fire when a control button is clicked. */
+function QueueControlButton({
+  label,
+  title,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      title={title}
+      style={{
+        fontSize: 13,
+        padding: '2px 6px',
+        minWidth: 28,
+        lineHeight: 1,
+      }}
+    >
+      {label}
+    </button>
+  );
+}

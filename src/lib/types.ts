@@ -342,6 +342,62 @@ export interface InboxQuery {
   offset?: number;
 }
 
+// ----- TAV-54: Watch queue ---------------------------------------------------
+
+/**
+ * A single ranked candidate in the Watch queue (TAV-54). The queue blends
+ * seven signals — never-watched, not-completed, topic match, channel affinity,
+ * reference graph, freshness, engagement — into a single `score` (0–1
+ * normalised against the page max). `reason` is a short human-readable string
+ * explaining the top contributing signals, for display under the video title.
+ */
+export interface WatchQueueItem {
+  video_id: string;
+  title: string;
+  channel_title: string;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  published_at: number | null;
+  /** Normalised relevance score (0–1). Higher = more relevant. */
+  score: number;
+  /** Short string explaining why the video is ranked, e.g. "Never watched · 2 topic matches". */
+  reason: string;
+  /**
+   * TAV-59: Whether this item was explicitly pinned to the top via
+   * `queue_pins`. Populated by the build functions which already join
+   * `queue_pins`. The `reason` string is display-only and must not be used
+   * as a pin-state flag — this boolean is the source of truth for the
+   * pin/unpin toggle.
+   */
+  is_pinned: boolean;
+}
+
+// ----- TAV-55: Music queue ---------------------------------------------------
+
+/**
+ * A single ranked candidate in the Music queue (TAV-55). Same shape as
+ * {@link WatchQueueItem} but without the `reason` field — music queue reasons
+ * are simpler ("from channels you listen to often" / "new from this artist")
+ * and are derived client-side from the score components. `score` is 0–1
+ * normalised against the page max, matching the Watch queue.
+ */
+export interface MusicQueueItem {
+  video_id: string;
+  title: string;
+  channel_title: string;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  published_at: number | null;
+  /** Normalised relevance score (0–1). Higher = more relevant. */
+  score: number;
+  /**
+   * TAV-59: Whether this item was explicitly pinned to the top via
+   * `queue_pins`. Populated by the build function which already joins
+   * `queue_pins`. Source of truth for the pin/unpin toggle.
+   */
+  is_pinned: boolean;
+}
+
 // ----- TAV-26: Curated channel playlists -------------------------------------
 
 /** A curated public playlist stored from `playlists.list` (channel detail page). */

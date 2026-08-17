@@ -1145,3 +1145,172 @@ export async function sendToIntegrationAction(
   }
 }
 
+// ----- TAV-61: Queue pins (Watch next / Listen next / Play these next) --------
+
+export interface PinQueueOutcome {
+  ok: boolean;
+  /** The queue the pin targeted: 'watch' or 'music'. */
+  queue: 'watch' | 'music';
+  /** How many videos were pinned (1 for single, N for batch). */
+  count: number;
+  error?: string;
+}
+
+/**
+ * Pin a single video to the top of the Watch or Music queue (TAV-61). The
+ * caller decides which queue via the `queue` param — 'watch' for the Watch tab,
+ * 'music' for the Music tab. Pins persist in `queue_pins` and survive the
+ * force-dynamic re-fetch on /watch and /music.
+ */
+export async function pinToQueueTopAction(
+  videoId: string,
+  queue: 'watch' | 'music',
+): Promise<PinQueueOutcome> {
+  try {
+    const { pinToQueueTop } = await import('@/lib/queue');
+    await pinToQueueTop(videoId, queue);
+    revalidatePath('/watch');
+    revalidatePath('/music');
+    return { ok: true, queue, count: 1 };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, queue, count: 0, error: msg };
+  }
+}
+
+/**
+ * Pin multiple videos to the top of the Watch or Music queue in one batch
+ * (TAV-61). Used by "Play these next" (MostReferencedSection) and "Queue this
+ * channel" (QueueChannelButton) so they fire one server action, not N.
+ * Preserves caller order: videoIds[0] lands at position 0, videoIds[1] at 1.
+ */
+export async function pinMultipleToQueueTopAction(
+  videoIds: string[],
+  queue: 'watch' | 'music',
+): Promise<PinQueueOutcome> {
+  try {
+    const { pinMultipleToQueueTop } = await import('@/lib/queue');
+    await pinMultipleToQueueTop(videoIds, queue);
+    revalidatePath('/watch');
+    revalidatePath('/music');
+    return { ok: true, queue, count: videoIds.length };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, queue, count: 0, error: msg };
+  }
+}
+
+// ----- TAV-59: Queue controls (skip / unpin / defer) --------------------------
+
+export interface QueueControlOutcome {
+  ok: boolean;
+  videoId: string;
+  queue: 'watch' | 'music';
+  error?: string;
+}
+
+/** Revalidate only the affected queue path (+ inbox for skip/defer). */
+function revalidateQueue(queue: 'watch' | 'music', alsoInbox = false) {
+  revalidatePath(queue === 'watch' ? '/watch' : '/music');
+  if (alsoInbox) revalidatePath('/inbox');
+}
+
+/**
+ * Skip a video from the Watch or Music queue. Marks the video as `seen` via
+ * `setVideoState` (so the queue query — which excludes `state = 'seen'` —
+ * drops it on the next render) and removes any pin so it doesn't reappear at
+ * the top after a force-dynamic re-fetch. Both mutations run in a single
+ * transaction so a partial failure doesn't leave the video seen-but-still-pinned.
+ */
+export async function skipQueueItemAction(
+  videoId: string,
+  queue: 'watch' | 'music',
+): Promise<QueueControlOutcome> {
+  try {
+    const { withTransaction } = await import('@/lib/db');
+    await withTransaction(async (client) => {
+      const now = Math.floor(Date.now() / 1000);
+      // Unpin first so a failure here leaves the video pinned but not yet
+      // marked seen — recoverable, not contradictory.
+      await client.query('DELETE FROM queue_pins WHERE queue = $1 AND video_id = $2', [queue, videoId]);
+      await client.query(
+        `INSERT INTO video_states (video_id, state, updated_at)
+         VALUES ($1, 'seen', $2)
+         ON CONFLICT (video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
+        [videoId, now],
+      );
+    });
+    revalidateQueue(queue, true);
+    return { ok: true, videoId, queue };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, videoId, queue, error: msg };
+  }
+}
+
+/**
+ * Unpin a video from the Watch or Music queue without marking it as seen.
+ * The video stays in the ranked queue (it wasn't dismissed), just no longer
+ * locked at the top. Used when the user toggles a pin off from the queue UI.
+ */
+export async function unpinQueueItemAction(
+  videoId: string,
+  queue: 'watch' | 'music',
+): Promise<QueueControlOutcome> {
+  try {
+    const { unpinFromQueue } = await import('@/lib/queue');
+    await unpinFromQueue(videoId, queue);
+    revalidateQueue(queue);
+    return { ok: true, videoId, queue };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, videoId, queue, error: msg };
+  }
+}
+
+/**
+ * "Not now, but later" — dismiss a video from the current playback queue and
+ * push it to the existing Summarize Later queue. Enqueues the video for
+ * summary, marks it `seen` (so it drops out of the Watch/Music queue), and
+ * removes any pin. All three mutations run in a single transaction so a
+ * partial failure doesn't leave the video in a contradictory state (e.g.
+ * enqueued but still pinned, or seen but not enqueued).
+ */
+export async function deferToLaterQueueAction(
+  videoId: string,
+  queue: 'watch' | 'music',
+): Promise<QueueControlOutcome> {
+  try {
+    const { withTransaction } = await import('@/lib/db');
+    const { newId } = await import('@/lib/id');
+    await withTransaction(async (client) => {
+      const now = Math.floor(Date.now() / 1000);
+      // Enqueue for summary (idempotent upsert, matching enqueueForSummary).
+      await client.query(
+        `INSERT INTO summarize_queue (id, video_id, state, queued_at, summarized_at, created_at)
+         VALUES ($1, $2, 'queued', $3, NULL, $3)
+         ON CONFLICT (video_id) DO UPDATE SET
+          state = 'queued',
+          queued_at = excluded.queued_at,
+          summarized_at = NULL`,
+        [newId(), videoId, now],
+      );
+      // Unpin so it doesn't reappear at the top of the playback queue.
+      await client.query('DELETE FROM queue_pins WHERE queue = $1 AND video_id = $2', [queue, videoId]);
+      // Mark seen so the queue query drops it.
+      await client.query(
+        `INSERT INTO video_states (video_id, state, updated_at)
+         VALUES ($1, 'seen', $2)
+         ON CONFLICT (video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
+        [videoId, now],
+      );
+    });
+    revalidateQueue(queue, true);
+    revalidatePath('/summarize-later');
+    return { ok: true, videoId, queue };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, videoId, queue, error: msg };
+  }
+}
+

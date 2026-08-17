@@ -12,6 +12,7 @@ import { ChannelCatalogSearch } from '../../_components/ChannelCatalogSearch';
 import { ChannelPlaylists } from '../../_components/ChannelPlaylists';
 import { MostReferencedSection } from '../../_components/MostReferencedSection';
 import { ExportButton } from '../../_components/ExportButton';
+import { QueueChannelButton } from '../../_components/QueueChannelButton';
 import { formatCount, formatRelative, youtubeChannelUrl } from '../../_lib/format';
 import { isConnected, getUserProfile } from '@/lib/tokens';
 
@@ -26,12 +27,17 @@ export default async function ChannelPage({ params }: Props) {
   const channel = await getChannel(id);
   if (!channel) notFound();
 
-  const [folders, tags, connected, profile, videos, playlists] = await Promise.all([
+  // TAV-63: the Queue-this-channel button pins the N most-recent *unwatched*
+  // videos (the TAV-61 spec), so we fetch a separate unwatched list for its
+  // video ids. `videos` (for VideosPanel) stays unfiltered so the panel still
+  // shows all recent uploads regardless of triage state.
+  const [folders, tags, connected, profile, videos, unwatchedForQueue, playlists] = await Promise.all([
     listFolders(),
     listTags(),
     isConnected(),
     getUserProfile(),
     listVideosByChannel(channel.channel_id, 30),
+    listVideosByChannel(channel.channel_id, 30, { excludeSeen: true }),
     listChannelPlaylists(channel.channel_id),
   ]);
 
@@ -88,6 +94,12 @@ export default async function ChannelPage({ params }: Props) {
 
         <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
           <ExportButton channelId={channel.channel_id} summaryCount={videos.filter(v => v.summary).length} />
+          {/* TAV-61: Queue this channel — batch-pin recent videos to Watch/Music queue */}
+          <QueueChannelButton
+            channelId={channel.channel_id}
+            videoIds={unwatchedForQueue.slice(0, 10).map(v => v.video_id)}
+            musicFlag={channel.music_flag}
+          />
         </div>
 
         <VideosPanel channelId={channel.channel_id} initialVideos={videos} connected={connected} musicFlag={channel.music_flag} />

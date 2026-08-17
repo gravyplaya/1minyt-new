@@ -213,11 +213,98 @@ export async function getVideo(videoId: string): Promise<VideoRow | null> {
   }
 }
 
-export async function listVideosByChannel(channelId: string, limit = 30): Promise<VideoWithSummary[]> {
+/**
+ * Fetch a single video row joined with its latest summary, chapters, community
+ * pulse, and like state — the full {@link VideoWithSummary} shape needed to
+ * render the "Now Playing" panel on the /watch page (TAV-56).
+ *
+ * Mirrors the hydration pattern `listVideosByChannel` uses, but for one video.
+ * Returns null when the video isn't in the local cache.
+ */
+export async function getVideoWithSummary(videoId: string): Promise<VideoWithSummary | null> {
   const client = await getDb();
   try {
+    const { rows } = await client.query<VideoRow>('SELECT * FROM videos WHERE video_id = $1', [videoId]);
+    const video = rows[0];
+    if (!video) return null;
+
+    // Latest summary for this video.
+    const summaryResult = await client.query<SummaryDbRow>(
+      'SELECT * FROM summaries WHERE video_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [videoId],
+    );
+    const summary = summaryResult.rows[0] ? hydrateSummary(summaryResult.rows[0]) : null;
+
+    // Chapters (TAV-13).
+    const chapterResult = await client.query<{ chapters: string }>(
+      'SELECT chapters FROM video_chapters WHERE video_id = $1',
+      [videoId],
+    );
+    let chapters: Chapter[] | null = null;
+    if (chapterResult.rows[0]?.chapters) {
+      try { chapters = JSON.parse(chapterResult.rows[0].chapters) as Chapter[]; } catch { /* keep null */ }
+    }
+
+    // Community pulse (TAV-20).
+    const pulseResult = await client.query<{
+      comments: string; fetched_at: number;
+      summary: string | null; summary_model: string | null;
+    }>(
+      'SELECT comments, fetched_at, summary, summary_model FROM video_comments WHERE video_id = $1',
+      [videoId],
+    );
+    let community_pulse: CommunityPulse | null = null;
+    if (pulseResult.rows[0]) {
+      const row = pulseResult.rows[0];
+      let comments: VideoComment[] = [];
+      try { comments = JSON.parse(row.comments) as VideoComment[]; } catch { /* keep default */ }
+      community_pulse = {
+        video_id: videoId,
+        comments,
+        summary: row.summary,
+        summary_model: row.summary_model,
+        fetched_at: row.fetched_at,
+      };
+    }
+
+    // Like state (TAV-41).
+    const likedResult = await client.query<{ video_id: string }>(
+      'SELECT video_id FROM video_likes WHERE video_id = $1',
+      [videoId],
+    );
+    const liked = likedResult.rows.length > 0;
+
+    return {
+      ...video,
+      summary,
+      chapters,
+      community_pulse,
+      liked,
+    };
+  } finally {
+    client.release();
+  }
+}
+
+export async function listVideosByChannel(
+  channelId: string,
+  limit = 30,
+  options?: { excludeSeen?: boolean },
+): Promise<VideoWithSummary[]> {
+  const excludeSeen = options?.excludeSeen ?? false;
+  const client = await getDb();
+  try {
+    // TAV-63: when `excludeSeen` is set, skip videos the user has already
+    // triaged as 'seen' in the inbox. The channel page uses this so the
+    // "Queue this channel" button pins unwatched videos only (the TAV-61
+    // spec says "N most-recent unwatched videos"). The LEFT JOIN keeps
+    // pre-triage videos (no video_states row) — only `state = 'seen'`
+    // rows are excluded.
+    const seenClause = excludeSeen
+      ? 'LEFT JOIN video_states vs ON vs.video_id = videos.video_id WHERE videos.channel_id = $1 AND (vs.state IS NULL OR vs.state <> \'seen\')'
+      : 'WHERE videos.channel_id = $1';
     const { rows } = await client.query<VideoRow>(
-      'SELECT * FROM videos WHERE channel_id = $1 ORDER BY published_at DESC LIMIT $2',
+      `SELECT videos.* FROM videos ${seenClause} ORDER BY videos.published_at DESC LIMIT $2`,
       [channelId, limit],
     );
     if (rows.length === 0) return [];
@@ -483,6 +570,40 @@ export async function recordVideoPlay(videoId: string, progressSeconds = 0, comp
  * "when did they first like this" history, and YouTube doesn't expose an
  * original likedAt value on the API row.
  */
+/**
+ * Ensure a minimal `channels` row exists for the given channel id, so that
+ * `videos.channel_id` FK constraint is satisfied when inserting a video from
+ * an uncached channel. Uses `ON CONFLICT (channel_id) DO NOTHING` so existing
+ * channels are left untouched (their richer metadata from a sync is preserved).
+ *
+ * Shared by {@link recordLikedVideos} (batch liked-video import) and the
+ * /watch page's best-effort fetch (`bestEffortFetchVideo`) to avoid duplicating
+ * the pattern.
+ *
+ * @param channelId  YouTube channel id. If null/empty, no row is inserted —
+ *                   callers should fall back to `'unknown'` for the video's
+ *                   `channel_id` (matching `recordLikedVideos`'s convention).
+ * @param channelTitle  Channel title from the API response, or null.
+ * @param client  Optional transaction client. When omitted, uses the pool.
+ */
+export async function ensureChannelRow(
+  channelId: string | null,
+  channelTitle: string | null,
+  client?: import('pg').PoolClient,
+): Promise<void> {
+  if (!channelId) return;
+  const now = Math.floor(Date.now() / 1000);
+  const sql = `INSERT INTO channels (channel_id, title, synced_at, created_at, updated_at)
+               VALUES ($1, $2, $3, $3, $3)
+               ON CONFLICT (channel_id) DO NOTHING`;
+  const params = [channelId, channelTitle ?? channelId, now];
+  if (client) {
+    await client.query(sql, params);
+  } else {
+    await query(sql, params);
+  }
+}
+
 export async function recordLikedVideos(likes: ReadonlyArray<{
   video_id: string;
   channel_id: string | null;
@@ -506,14 +627,7 @@ export async function recordLikedVideos(likes: ReadonlyArray<{
     for (const input of likes) {
       if (seen.has(input.video_id)) { skipped++; continue; }
       seen.add(input.video_id);
-      if (input.channel_id) {
-        await client.query(
-          `INSERT INTO channels (channel_id, title, synced_at, created_at, updated_at)
-           VALUES ($1, $2, $3, $3, $3)
-           ON CONFLICT (channel_id) DO NOTHING`,
-          [input.channel_id, input.channel_title ?? input.channel_id, now],
-        );
-      }
+      await ensureChannelRow(input.channel_id, input.channel_title, client);
       const channelId = input.channel_id ?? 'unknown';
       await client.query(
         `INSERT INTO videos (

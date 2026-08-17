@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { InboxVideo } from '@/lib/types';
-import { dismissVideoAction, saveVideoAction, untriageVideoAction, inboxSummarizeAction, addToQueueAction } from '@/app/actions';
+import { dismissVideoAction, saveVideoAction, untriageVideoAction, inboxSummarizeAction, addToQueueAction, pinToQueueTopAction } from '@/app/actions';
 import { formatCount, formatRelative, youtubeVideoUrl } from '../_lib/format';
 
 type Stage = 'idle' | 'working' | 'done' | 'error';
@@ -57,6 +57,7 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
   const [dismissPending, startDismiss] = useTransition();
   const [savePending, startSave] = useTransition();
   const [queuePending, startQueue] = useTransition();
+  const [watchPending, startWatch] = useTransition();
   const [summaryStage, setSummaryStage] = useState<Stage>('idle');
   const [summaryError, setSummaryError] = useState<string | null>(null);
   // TAV-23: track whether this video was added to the Summarize Later queue.
@@ -117,6 +118,16 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
     startQueue(async () => {
       await addToQueueAction(video.video_id);
       router.refresh();
+    });
+  };
+
+  // TAV-61: "Watch next" — pin this video to the top of the Watch queue, then
+  // navigate to /watch?v=<id> so it starts playing. The pin persists in
+  // queue_pins and survives the force-dynamic re-fetch on /watch.
+  const watchNext = () => {
+    startWatch(async () => {
+      await pinToQueueTopAction(video.video_id, 'watch');
+      router.push(`/watch?v=${video.video_id}`);
     });
   };
 
@@ -227,7 +238,7 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
             type="button"
             className="btn btn-ghost"
             onClick={dismiss}
-            disabled={dismissPending || savePending || queuePending || summaryStage === 'working'}
+            disabled={dismissPending || savePending || queuePending || watchPending || summaryStage === 'working'}
             title="Dismiss (mark seen)"
             style={{ fontSize: 14, padding: '6px 10px', color: '#8b8b94' }}
           >
@@ -238,7 +249,7 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
             type="button"
             className="btn btn-ghost"
             onClick={save}
-            disabled={dismissPending || savePending || queuePending || summaryStage === 'working'}
+            disabled={dismissPending || savePending || queuePending || watchPending || summaryStage === 'working'}
             title={scope === 'saved' ? 'Remove from saved' : 'Save for later'}
             aria-pressed={scope === 'saved'}
             style={{
@@ -252,12 +263,23 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
           >
             {scope === 'saved' ? '★' : '☆'}
           </button>
+          {/* Watch next — TAV-61: pin to Watch queue + navigate */}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={watchNext}
+            disabled={dismissPending || savePending || queuePending || watchPending || summaryStage === 'working'}
+            title="Pin to top of Watch queue and play now"
+            style={{ fontSize: 12, padding: '6px 10px', color: '#5b9eff' }}
+          >
+            {watchPending ? 'Pinning…' : '▶ Watch next'}
+          </button>
           {/* Summarize Later — TAV-23 */}
           <button
             type="button"
             className="btn btn-ghost"
             onClick={addToQueue}
-            disabled={dismissPending || savePending || queuePending || summaryStage === 'working' || queued}
+            disabled={dismissPending || savePending || queuePending || watchPending || summaryStage === 'working' || queued}
             title={queued ? 'Added to Summarize Later queue' : 'Add to Summarize Later queue'}
             aria-pressed={queued}
             style={{
@@ -275,7 +297,7 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
             type="button"
             className="btn btn-primary"
             onClick={summarize}
-            disabled={dismissPending || savePending || queuePending || summaryStage === 'working' || video.transcript_status === 'unavailable'}
+            disabled={dismissPending || savePending || queuePending || watchPending || summaryStage === 'working' || video.transcript_status === 'unavailable'}
             title={video.transcript_status === 'unavailable' ? 'No captions available' : 'Generate a 1-click summary'}
             style={{ fontSize: 12, padding: '6px 12px' }}
           >

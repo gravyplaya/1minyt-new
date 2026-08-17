@@ -537,7 +537,7 @@ export function VideoSummaryRow({
   );
 }
 
-function SummaryBody({
+export function SummaryBody({
   summary,
   videoId,
   chapters,

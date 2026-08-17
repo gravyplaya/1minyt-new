@@ -398,6 +398,25 @@ export const SCHEMA_STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_video_history_last_played ON video_play_history(last_played_at DESC)`,
 
+  // ----- TAV-61: Pinned videos for the Watch/Music queue ----------------------
+  //
+  // One row per pinned video on a given queue surface. `queue` is 'watch' or
+  // 'music' — the same video could be pinned to both independently. `position`
+  // is the pin order within the queue (lower = closer to the top); the most
+  // recently pinned video gets position 0 so it lands at the top. Re-pinning a
+  // video that's already on a queue updates its pinned_at and bumps it to the
+  // top. Deleting unpins. The composite (queue, video_id) unique constraint
+  // means one active pin per video per queue.
+  `CREATE TABLE IF NOT EXISTS queue_pins (
+    queue       TEXT NOT NULL,
+    video_id    TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL DEFAULT 0,
+    pinned_at   INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (queue, video_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_queue_pins_queue_pos ON queue_pins(queue, position ASC, pinned_at DESC)`,
+
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;
