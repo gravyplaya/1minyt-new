@@ -18,7 +18,7 @@ import { search } from './vector-store';
 import type { ChatMessage, ChatCitation, TranscriptChunk } from './types';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
-const DEFAULT_CHAT_MODEL = process.env.CHAT_MODEL?.trim() || 'openai/gpt-oss-20b:free';
+const DEFAULT_CHAT_MODEL = process.env.CHAT_MODEL?.trim() || 'openrouter/free';
 const MAX_HISTORY = 10; // last N messages to include as context
 
 export interface ChatInput {

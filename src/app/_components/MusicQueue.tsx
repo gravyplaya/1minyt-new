@@ -6,9 +6,16 @@
  * TAV-57 built the two-panel layout (minimized player + Now Playing | Up Next).
  * TAV-59 adds:
  *   - Autoplay: onEnded advances to the next track immediately (no countdown —
- *     music flows differently). Navigates to `/music?v=<next_video_id>`.
+ *     music flows differently). Navigates to `/music?v=<next_video_id>`. The
+ *     player is created with autoplay, so clicks and advances start playing
+ *     without a second click.
  *   - Queue controls: drag-to-reorder, skip (marks `seen`), pin, shuffle,
  *     and "Not now, but later" (push to Summarize Later queue).
+ *
+ * The left column also hosts the "All Music" library (MusicLibrarySection):
+ * every track from music-flagged channels grouped by artist, so the user can
+ * pick music beyond what the ranked queue surfaced. Picking a track switches
+ * Up Next to that artist's catalogue (see the /music page).
  *
  * Mirrors the WatchQueue control surface but without the countdown overlay or
  * the AI tooling (no TL;DR, no key points, no chapters, no chat, no references).
@@ -17,7 +24,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useRef, useState, useEffect, useTransition } from 'react';
-import type { MusicQueueItem } from '@/lib/types';
+import type { MusicLibraryGroup, MusicQueueItem } from '@/lib/types';
 import { YouTubePlayer, type YouTubePlayerHandle } from './YouTubePlayer';
 import {
   skipQueueItemAction,
@@ -36,9 +43,11 @@ export interface MusicQueueProps {
   queue: MusicQueueItem[];
   /** The "now playing" track. */
   nowPlaying: MusicQueueItem;
+  /** Every track from music-flagged channels, grouped by artist (listMusicLibrary). */
+  library: MusicLibraryGroup[];
 }
 
-export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
+export function MusicQueue({ queue, nowPlaying, library }: MusicQueueProps) {
   const videoId = nowPlaying.video_id;
   const router = useRouter();
   const playerHandleRef = useRef<YouTubePlayerHandle | null>(null);
@@ -57,12 +66,24 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
 
   // TAV-59: auto-advance to the next track immediately when the current one
   // ends. No countdown overlay — music flows continuously. If this was the
-  // last track, do nothing (the track just ends).
-  const handleEnded = () => {
-    const next = localQueue[0];
+  // last track, do nothing (the track just ends). Tracks that errored this
+  // session (embed-disabled, deleted, region-locked) are skipped so the
+  // queue never stalls on — or loops back to — a dead track.
+  const erroredIdsRef = useRef<Set<string>>(new Set());
+
+  const advanceToNext = () => {
+    const next = localQueue.find((q) => !erroredIdsRef.current.has(q.video_id));
     if (next) {
       router.push(`/music?v=${next.video_id}`);
     }
+  };
+
+  const handleEnded = () => advanceToNext();
+
+  // The current track is unplayable: remember it and move on.
+  const handlePlayerError = () => {
+    erroredIdsRef.current.add(videoId);
+    advanceToNext();
   };
 
   const onPlayerReady = (handle: YouTubePlayerHandle) => {
@@ -155,7 +176,8 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Minimized player — audio-only bar */}
+      {/* Minimized player — audio-only bar. Autoplays: clicking a track or
+          auto-advancing should start playback without a second click. */}
       <YouTubePlayer
         key={videoId}
         videoId={videoId}
@@ -164,6 +186,8 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
         thumbnailUrl={nowPlaying.thumbnail_url}
         onReady={onPlayerReady}
         onEnded={handleEnded}
+        onError={handlePlayerError}
+        autoPlay
       />
 
       {/* Two-panel layout: Now Playing | Up Next */}
@@ -262,6 +286,11 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
               </div>
             </div>
           </div>
+
+          {/* Browsable library — every track from music-flagged channels, so
+              the user can pick music beyond what the ranked queue surfaced.
+              Lives in the left column, beside the Up Next sidebar. */}
+          <MusicLibrarySection groups={library} activeId={videoId} />
         </div>
 
         {/* Right: Up Next queue with TAV-59 controls */}
@@ -325,6 +354,176 @@ export function MusicQueue({ queue, nowPlaying }: MusicQueueProps) {
         </aside>
       </div>
     </div>
+  );
+}
+
+/**
+ * "All Music" — the full browsable library of tracks from music-flagged
+ * channels, grouped by artist (A–Z, newest tracks first within each artist).
+ * Each artist group is collapsible; clicking a track navigates to
+ * `/music?v=<video_id>`. Rendered below the queue on /music, and standalone
+ * by the page when the queue is empty.
+ */
+export function MusicLibrarySection({
+  groups,
+  activeId,
+}: {
+  groups: MusicLibraryGroup[];
+  activeId: string | null;
+}) {
+  if (groups.length === 0) return null;
+  const total = groups.reduce((n, g) => n + g.tracks.length, 0);
+
+  return (
+    <section style={{ marginTop: 24 }}>
+      <div
+        style={{
+          fontSize: 13,
+          fontWeight: 600,
+          color: '#e7e7ea',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          marginBottom: 12,
+        }}
+      >
+        All Music · {total}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {groups.map((group) => (
+          <details
+            key={group.channel_title}
+            style={{
+              border: '1px solid #2a2a33',
+              borderRadius: 10,
+              background: '#15151a',
+              overflow: 'hidden',
+            }}
+          >
+            <summary
+              style={{
+                cursor: 'pointer',
+                padding: '10px 14px',
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#e7e7ea',
+                listStylePosition: 'inside',
+              }}
+            >
+              {group.channel_title}
+              <span style={{ color: '#8b8b94', fontWeight: 400, marginLeft: 8 }}>
+                {group.tracks.length} {group.tracks.length === 1 ? 'track' : 'tracks'}
+              </span>
+            </summary>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                borderTop: '1px solid #2a2a33',
+              }}
+            >
+              {group.tracks.map((track) => (
+                <MusicLibraryRow
+                  key={track.video_id}
+                  track={track}
+                  active={track.video_id === activeId}
+                />
+              ))}
+            </div>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** One compact, clickable track row inside a library artist group. */
+function MusicLibraryRow({
+  track,
+  active,
+}: {
+  track: MusicLibraryGroup['tracks'][number];
+  active: boolean;
+}) {
+  return (
+    <Link
+      href={`/music?v=${track.video_id}`}
+      aria-label={`Play ${track.title}`}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '64px 1fr auto',
+        gap: 10,
+        alignItems: 'center',
+        padding: '6px 14px',
+        textDecoration: 'none',
+        background: active ? 'rgba(91,158,255,0.06)' : 'transparent',
+        boxShadow: active ? 'inset 2px 0 0 #5b9eff' : 'none',
+      }}
+    >
+      {track.thumbnail_url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={track.thumbnail_url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          style={{
+            width: 64,
+            height: 36,
+            objectFit: 'cover',
+            borderRadius: 4,
+            background: '#1f1f26',
+            display: 'block',
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            width: 64,
+            height: 36,
+            borderRadius: 4,
+            background: '#1f1f26',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#5a5a64',
+            fontSize: 12,
+          }}
+          aria-hidden="true"
+        >
+          ♪
+        </div>
+      )}
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            color: active ? '#cfe4ff' : '#e7e7ea',
+            fontSize: 13,
+            fontWeight: active ? 600 : 400,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {track.title}
+        </div>
+        {track.published_at && (
+          <div style={{ color: '#8b8b94', fontSize: 11, marginTop: 1 }}>
+            {formatRelative(track.published_at)}
+          </div>
+        )}
+      </div>
+      {track.duration_seconds != null && (
+        <span
+          style={{
+            color: '#8b8b94',
+            fontSize: 11,
+            fontFamily: 'monospace',
+          }}
+        >
+          {formatDuration(track.duration_seconds)}
+        </span>
+      )}
+    </Link>
   );
 }
 

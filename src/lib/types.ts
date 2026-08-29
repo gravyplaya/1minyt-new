@@ -398,6 +398,32 @@ export interface MusicQueueItem {
   is_pinned: boolean;
 }
 
+/**
+ * A single track in the browsable Music library (every video from
+ * music-flagged channels, not just the ranked queue page). Self-contained —
+ * the music view needs no summary/transcript hydration.
+ */
+export interface MusicLibraryTrack {
+  video_id: string;
+  title: string;
+  channel_title: string;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  published_at: number | null;
+  /**
+   * Whether the track is marked `seen` (skipped/deferred). The library shows
+   * seen tracks — a catalogue, not an inbox — but the artist "Up Next" queue
+   * built from a library pick filters them out so skip/defer stick.
+   */
+  is_seen: boolean;
+}
+
+/** Music library tracks grouped under one artist (channel). */
+export interface MusicLibraryGroup {
+  channel_title: string;
+  tracks: MusicLibraryTrack[];
+}
+
 // ----- TAV-26: Curated channel playlists -------------------------------------
 
 /** A curated public playlist stored from `playlists.list` (channel detail page). */

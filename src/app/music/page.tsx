@@ -1,7 +1,7 @@
-import { buildMusicQueue } from '@/lib/queue';
+import { buildMusicQueue, listMusicLibrary } from '@/lib/queue';
 import { isConnected, getUserProfile } from '@/lib/tokens';
 import { AppShell } from '../_components/AppShell';
-import { MusicQueue } from '../_components/MusicQueue';
+import { MusicQueue, MusicLibrarySection } from '../_components/MusicQueue';
 import type { MusicQueueItem } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -13,51 +13,86 @@ interface PageProps {
 /**
  * TAV-57: /music route — a player-first music consumption surface.
  *
- * Server component: calls buildMusicQueue(20) and passes the full queue to the
- * client MusicQueue component. The "now playing" track is the top-ranked queue
- * item unless the `?v=` query param selects a specific one.
+ * Server component: calls buildMusicQueue(20) and listMusicLibrary(), passing
+ * both to the client MusicQueue component.
  *
- * Unlike the /watch route, there is no best-effort YouTube API fetch for videos
- * missing from the local cache — music queue items are self-contained (title +
- * channel + thumbnail) and the view strips all AI tooling (no summaries, no
- * transcripts, no chapters, no chat, no references). If `?v=` names a video not
- * in the queue, we fall back to the first queue item.
+ * Now-playing resolution: an explicit `?v=` naming any track from a
+ * music-flagged channel plays that track and turns Up Next into the rest of
+ * that artist's catalogue ("artist radio"). Without `?v=` (cold load), the
+ * top-ranked queue item plays and Up Next shows the ranked queue.
+ *
+ * Unlike the /watch route, there is no best-effort YouTube API fetch for
+ * videos missing from the local cache — music items are self-contained
+ * (title + channel + thumbnail) and the view strips all AI tooling (no
+ * summaries, no transcripts, no chapters, no chat, no references).
  */
 export default async function MusicPage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const [connected, profile, queue] = await Promise.all([
+  const [connected, profile, queue, library] = await Promise.all([
     isConnected(),
     getUserProfile(),
     buildMusicQueue(20),
+    listMusicLibrary(),
   ]);
 
-  if (queue.length === 0) {
+  const requestedId = params.v?.trim();
+
+  // Resolve an explicit track pick against the full library (every music
+  // track, not just the ranked page) — no extra query needed.
+  const libraryMatch = requestedId
+    ? library.flatMap((g) => g.tracks).find((t) => t.video_id === requestedId) ?? null
+    : null;
+
+  let nowPlaying: MusicQueueItem | null;
+  let orderedQueue: MusicQueueItem[];
+
+  if (libraryMatch) {
+    // Artist radio: play the picked track; Up Next = the rest of that
+    // artist's catalogue (seen/skipped tracks excluded so skip/defer stick).
+    // Prefer the queue's own row for now-playing when present — same display
+    // fields, but keeps the real score/is_pinned values.
+    nowPlaying =
+      queue.find((q) => q.video_id === libraryMatch.video_id) ??
+      { ...libraryMatch, score: 0, is_pinned: false };
+    const artist = library.find((g) => g.channel_title === libraryMatch.channel_title);
+    orderedQueue = (artist?.tracks ?? [])
+      .filter((t) => t.video_id !== libraryMatch.video_id && !t.is_seen)
+      .slice(0, 19)
+      .map((t) => ({ ...t, score: 0, is_pinned: false }));
+  } else if (queue.length > 0) {
+    // Cold load (or an unknown/non-music ?v=): top-ranked track + ranked queue.
+    nowPlaying = queue[0];
+    orderedQueue = queue
+      .filter((q) => q.video_id !== nowPlaying!.video_id)
+      .slice(0, 19);
+  } else {
+    nowPlaying = null;
+    orderedQueue = [];
+  }
+
+  if (!nowPlaying) {
     return (
       <AppShell tab="music" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-        <EmptyMusicState connected={connected} />
+        {library.length > 0 ? (
+          <div style={{ maxWidth: 720, margin: '0 auto' }}>
+            <h2 style={{ fontSize: 22, fontWeight: 600, margin: '40px 0 8px' }}>
+              Pick something to play
+            </h2>
+            <p style={{ color: '#8b8b94', fontSize: 14, marginBottom: 24 }}>
+              Your queue is empty, but your music library is all here.
+            </p>
+            <MusicLibrarySection groups={library} activeId={null} />
+          </div>
+        ) : (
+          <EmptyMusicState connected={connected} />
+        )}
       </AppShell>
     );
   }
 
-  // Determine the "now playing" track: prefer ?v= if it's in the queue, else
-  // the top-ranked item. No best-effort fetch — music items are self-contained.
-  const requestedId = params.v?.trim();
-  const nowPlayingId =
-    requestedId && queue.some((q) => q.video_id === requestedId)
-      ? requestedId
-      : queue[0].video_id;
-
-  const nowPlaying =
-    queue.find((q) => q.video_id === nowPlayingId) ?? queue[0];
-
-  // The "Up Next" list excludes the currently-playing track.
-  const orderedQueue: MusicQueueItem[] = queue
-    .filter((q) => q.video_id !== nowPlayingId)
-    .slice(0, 19);
-
   return (
     <AppShell tab="music" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <MusicQueue queue={orderedQueue} nowPlaying={nowPlaying} />
+      <MusicQueue queue={orderedQueue} nowPlaying={nowPlaying} library={library} />
     </AppShell>
   );
 }

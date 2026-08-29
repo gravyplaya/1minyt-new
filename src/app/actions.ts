@@ -23,7 +23,8 @@ import { getVideo, listRecentUploadIds, listVideosByChannel, saveSummary, setTra
 import { fetchTranscript } from '@/lib/transcript';
 import { isWhisperEnabled } from '@/lib/whisper';
 import { summarizeVideo, summarizeComments } from '@/lib/summarize';
-import { fetchTopComments, searchChannelVideos, fetchChannelPlaylists, fetchPlaylistVideos } from '@/lib/youtube';
+import { fetchTopComments, fetchChannelPlaylists, fetchPlaylistVideos } from '@/lib/youtube';
+import { searchChannelCatalog } from '@/lib/channel-search';
 import { getValidAccessToken } from '@/lib/tokens';
 import { detectChapters } from '@/lib/chapters';
 import { indexVideo, indexSummary, isIndexed, chunkCount, searchAcross, getSegments } from '@/lib/vector-store';
@@ -568,8 +569,9 @@ export async function searchChannelCatalogAction(
   try {
     const accessToken = await getValidAccessToken();
 
-    // Catalog: full back-catalog search via the YouTube Data API.
-    const raw = await searchChannelVideos(accessToken, channelId, q, 25, publishedAfter ?? null);
+    // Catalog: full back-catalog search via the swappable provider
+    // (Innertube by default, official Data API behind CHANNEL_SEARCH_PROVIDER).
+    const raw = await searchChannelCatalog(accessToken, channelId, q, 25, publishedAfter ?? null);
     const catalog: ChannelCatalogHit[] = raw.map(h => ({
       videoId: h.videoId,
       title: h.title,

@@ -5,9 +5,6 @@
  *
  * TAV-56 built the two-panel layout (Now Playing | Up Next).
  * TAV-59 adds:
- *   - Autoplay: onEnded fires a 5-second "Up Next" countdown overlay the
- *     user can dismiss. When the countdown reaches 0, navigate to the next
- *     queue item (`/watch?v=<video_id>`).
  *   - Queue controls: drag-to-reorder (HTML5 DnD → re-pin in new order),
  *     skip (marks `seen`), pin (lock to top via pinToQueueTopAction),
  *     shuffle (randomize top N → pinMultipleToQueueTopAction), and
@@ -41,9 +38,6 @@ import { formatRelative, formatDuration, youtubeVideoUrl } from '../_lib/format'
 /** Number of top queue items to shuffle when the user clicks Shuffle. */
 const SHUFFLE_TOP_N = 5;
 
-/** Countdown duration in seconds for the Watch "Up Next" overlay. */
-const UP_NEXT_COUNTDOWN_SECONDS = 5;
-
 export interface WatchQueueProps {
   /** Ranked candidate videos from buildWatchQueue(20), excluding now-playing. */
   queue: WatchQueueItem[];
@@ -61,8 +55,7 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
   // TAV-59: local reorderable copy of the queue. Synced from the prop when the
   // server re-renders (after a revalidate /watch from any server action). Uses
   // the cancelled-flag pattern (matching the segments effect below) so the
-  // update is synchronous — no microtask window where handleEnded reads a
-  // stale queue[0].
+  // update is synchronous — no microtask window where a stale queue[0] is read.
   const [localQueue, setLocalQueue] = useState<WatchQueueItem[]>(queue);
   useEffect(() => {
     let cancelled = false;
@@ -70,17 +63,6 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
     Promise.resolve().then(() => { if (!cancelled) setLocalQueue(incoming); });
     return () => { cancelled = true; };
   }, [queue]);
-
-  // TAV-59: "Up Next" countdown overlay state. When non-null, a countdown is
-  // ticking down from UP_NEXT_COUNTDOWN_SECONDS. At 0, we navigate to the
-  // next video. Dismiss sets it to null.
-  const [countdown, setCountdown] = useState<{
-    videoId: string;
-    title: string;
-    thumbnail: string | null;
-    channel: string;
-    remaining: number;
-  } | null>(null);
 
   const [, startTransition] = useTransition();
 
@@ -103,27 +85,6 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
     return () => { cancelled = true; };
   }, [segmentsKey]);
 
-  // TAV-59: countdown ticker. Fires every 1s while the countdown is active.
-  // When remaining hits 0, navigate to the next video and clear the overlay.
-  useEffect(() => {
-    if (!countdown) return;
-    if (countdown.remaining <= 0) {
-      const id = countdown.videoId;
-      // Deferred to a microtask to avoid the react-hooks/set-state-in-effect
-      // cascading-render warning. The navigation unmounts the component before
-      // the microtask runs, so React swallows the setState — harmless.
-      Promise.resolve().then(() => setCountdown(null));
-      router.push(`/watch?v=${id}`);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      Promise.resolve().then(() => {
-        setCountdown((c) => c ? { ...c, remaining: c.remaining - 1 } : null);
-      });
-    }, 1000);
-    return () => window.clearTimeout(timer);
-  }, [countdown, router]);
-
   // Seek handler passed to SummaryBody (chapters) and VideoChatPanel
   // (citations): jumps the player if mounted, otherwise defers until onReady.
   const handleSeek = (seconds: number) => {
@@ -140,32 +101,6 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
       handle.seekTo(pendingSeekRef.current);
       pendingSeekRef.current = null;
     }
-  };
-
-  // TAV-59: autoplay — when the player fires onEnded, look at the top of the
-  // local queue. If there's a next video, start the 5-second countdown overlay.
-  // If the queue is empty, do nothing (the video just ends).
-  const handleEnded = () => {
-    const next = localQueue[0];
-    if (!next) return;
-    setCountdown({
-      videoId: next.video_id,
-      title: next.title,
-      thumbnail: next.thumbnail_url,
-      channel: next.channel_title,
-      remaining: UP_NEXT_COUNTDOWN_SECONDS,
-    });
-  };
-
-  // TAV-59: dismiss the countdown overlay (user clicked "Cancel" or navigated away).
-  const dismissCountdown = () => setCountdown(null);
-
-  // TAV-59: skip the countdown and play the next video immediately.
-  const playNextNow = () => {
-    if (!countdown) return;
-    const id = countdown.videoId;
-    setCountdown(null);
-    router.push(`/watch?v=${id}`);
   };
 
   // TAV-59: drag-to-reorder. When a row is dragged from `from` to `to`, reorder
@@ -230,8 +165,6 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
   // Optimistically removes it from the local queue, then fires the server action.
   const handleSkip = (videoId: string) => {
     setLocalQueue((q) => q.filter((item) => item.video_id !== videoId));
-    // Also clear countdown if it was showing this video.
-    setCountdown((c) => c?.videoId === videoId ? null : c);
     startTransition(async () => {
       await skipQueueItemAction(videoId, 'watch');
       router.refresh();
@@ -257,7 +190,6 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
   // TAV-59: "Not now, but later" — push to Summarize Later queue.
   const handleDefer = (videoId: string) => {
     setLocalQueue((q) => q.filter((item) => item.video_id !== videoId));
-    setCountdown((c) => c?.videoId === videoId ? null : c);
     startTransition(async () => {
       await deferToLaterQueueAction(videoId, 'watch');
       router.refresh();
@@ -268,27 +200,13 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Full-width 16:9 player with countdown overlay */}
-      <div style={{ position: 'relative' }}>
-        <YouTubePlayer
-          key={videoId}
-          videoId={videoId}
-          segments={segments}
-          onReady={onPlayerReady}
-          onEnded={handleEnded}
-        />
-        {/* TAV-59: "Up Next" countdown overlay */}
-        {countdown && (
-          <UpNextCountdown
-            title={countdown.title}
-            thumbnail={countdown.thumbnail}
-            channel={countdown.channel}
-            remaining={countdown.remaining}
-            onPlayNow={playNextNow}
-            onDismiss={dismissCountdown}
-          />
-        )}
-      </div>
+      {/* Full-width 16:9 player */}
+      <YouTubePlayer
+        key={videoId}
+        videoId={videoId}
+        segments={segments}
+        onReady={onPlayerReady}
+      />
 
       {/* Two-panel layout: Now Playing | Up Next */}
       <div
@@ -459,157 +377,6 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
             ))}
           </div>
         </aside>
-      </div>
-    </div>
-  );
-}
-
-/**
- * TAV-59: "Up Next" countdown overlay. Renders on top of the player when a
- * video ends. Shows the next video's thumbnail + title with a countdown
- * from UP_NEXT_COUNTDOWN_SECONDS. Two actions: "Play now" (skip countdown)
- * and "Cancel" (dismiss overlay, stop autoplay).
- */
-function UpNextCountdown({
-  title,
-  thumbnail,
-  channel,
-  remaining,
-  onPlayNow,
-  onDismiss,
-}: {
-  title: string;
-  thumbnail: string | null;
-  channel: string;
-  remaining: number;
-  onPlayNow: () => void;
-  onDismiss: () => void;
-}) {
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        bottom: 60,
-        right: 16,
-        width: 300,
-        background: 'rgba(15, 15, 20, 0.95)',
-        border: '1px solid rgba(91, 158, 255, 0.35)',
-        borderRadius: 12,
-        padding: 12,
-        zIndex: 10,
-        backdropFilter: 'blur(8px)',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          marginBottom: 8,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: '#5b9eff',
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-          }}
-        >
-          Up Next in {remaining}s
-        </span>
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label="Cancel autoplay"
-          style={{
-            marginLeft: 'auto',
-            background: 'none',
-            border: 'none',
-            color: '#8b8b94',
-            cursor: 'pointer',
-            fontSize: 16,
-            padding: '0 4px',
-          }}
-        >
-          ✕
-        </button>
-      </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-        {thumbnail ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={thumbnail}
-            alt={title}
-            style={{
-              width: 100,
-              height: 56,
-              objectFit: 'cover',
-              borderRadius: 6,
-              background: '#1f1f26',
-              flexShrink: 0,
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              width: 100,
-              height: 56,
-              borderRadius: 6,
-              background: '#1f1f26',
-              flexShrink: 0,
-            }}
-          />
-          )}
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#e7e7ea',
-              lineHeight: 1.3,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-            }}
-          >
-            {title}
-          </div>
-          <div
-            style={{
-              fontSize: 11,
-              color: '#8b8b94',
-              marginTop: 2,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {channel}
-          </div>
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onPlayNow}
-          style={{ fontSize: 12, padding: '5px 12px', flex: 1 }}
-        >
-          ▶ Play now
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={onDismiss}
-          style={{ fontSize: 12, padding: '5px 12px' }}
-        >
-          Cancel
-        </button>
       </div>
     </div>
   );

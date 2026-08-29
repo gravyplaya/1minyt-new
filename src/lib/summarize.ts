@@ -39,9 +39,10 @@ export interface SummarizeResult {
 }
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
-// Default to a free text model with reliable json_object output.
+// Default to OpenRouter's free-pool router — it always resolves to a currently
+// available free model, so we don't break when a specific free slug is retired.
 // Override per-deploy via SUMMARY_MODEL in .env.
-const DEFAULT_MODEL = process.env.SUMMARY_MODEL?.trim() || 'openai/gpt-oss-20b:free';
+const DEFAULT_MODEL = process.env.SUMMARY_MODEL?.trim() || 'openrouter/free';
 const MAX_TRANSCRIPT_CHARS = 24_000;
 
 export async function summarizeVideo(input: SummarizeInput): Promise<SummarizeResult> {

@@ -51,6 +51,7 @@ interface YTPlayerOptions {
   events?: {
     onReady?: (e: YTPlayerEvent) => void;
     onStateChange?: (e: YTPlayerEvent) => void;
+    onError?: (e: YTPlayerEvent) => void;
   };
 }
 
@@ -165,6 +166,23 @@ export interface YouTubePlayerProps {
    * placeholder when not provided.
    */
   thumbnailUrl?: string | null;
+  /**
+   * Start playback as soon as the player is ready (via `playVideo()` in
+   * onReady — deliberately NOT the `autoplay=1` playerVar: with autoplay=1,
+   * YouTube's endscreen "Up next" can auto-play a suggested video inside the
+   * same player without ever firing the ENDED state, which breaks queue
+   * auto-advance). Used by the music page so clicking a track — or
+   * auto-advancing to the next one — starts playing without a second click.
+   * If the browser blocks unmuted autoplay (no prior interaction with the
+   * site), the player simply stays paused.
+   */
+  autoPlay?: boolean;
+  /**
+   * Fired when the player reports an unplayable video (e.g. embedding
+   * disabled, deleted, region-locked — YT error codes 100/101/150). Queue
+   * parents use this to skip dead tracks instead of stalling on them.
+   */
+  onError?: () => void;
 }
 
 export function YouTubePlayer({
@@ -176,6 +194,8 @@ export function YouTubePlayer({
   minimize = false,
   title,
   thumbnailUrl,
+  autoPlay = false,
+  onError,
 }: YouTubePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
@@ -194,6 +214,8 @@ export function YouTubePlayer({
   const onReadyRef = useRef(onReady);
   const initialStartRef = useRef(initialStart ?? 0);
   const onEndedRef = useRef(onEnded);
+  const autoPlayRef = useRef(autoPlay);
+  const onErrorRef = useRef(onError);
   // Sync refs in an effect to satisfy react-hooks/refs (no ref writes during render).
   useEffect(() => {
     onReadyRef.current = onReady;
@@ -204,6 +226,12 @@ export function YouTubePlayer({
   useEffect(() => {
     onEndedRef.current = onEnded;
   }, [onEnded]);
+  useEffect(() => {
+    autoPlayRef.current = autoPlay;
+  }, [autoPlay]);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   // Imperative seek exposed to the parent.
   const seekTo = useCallback((seconds: number) => {
@@ -247,6 +275,9 @@ export function YouTubePlayer({
             rel: 0,
             modestbranding: 1,
             playsinline: 1,
+            // NB: no `autoplay: 1` here — see the autoPlay prop doc. With the
+            // playerVar set, YouTube's endscreen can auto-play a suggested
+            // video without firing ENDED, silently breaking queue advance.
           },
           events: {
             onReady: (e: YTPlayerEvent) => {
@@ -257,6 +288,11 @@ export function YouTubePlayer({
                 setDuration(e.target.getDuration() || 0);
               } catch { /* duration may be 0 until metadata loads */ }
               onReadyRef.current?.({ seekTo });
+              // Autoplay via an explicit playVideo() call (not the playerVar)
+              // keeps ENDED deterministic at end-of-track.
+              if (autoPlayRef.current) {
+                try { e.target.playVideo(); } catch { /* autoplay blocked — stays paused */ }
+              }
             },
             onStateChange: (e: YTPlayerEvent) => {
               if (cancelled) return;
@@ -274,6 +310,12 @@ export function YouTubePlayer({
               if (state === window.YT!.PlayerState.ENDED) {
                 onEndedRef.current?.();
               }
+            },
+            // Unplayable video (embedding disabled, deleted, region-locked) —
+            // let the parent skip it instead of stalling on a dead player.
+            onError: () => {
+              if (cancelled) return;
+              onErrorRef.current?.();
             },
           },
         });

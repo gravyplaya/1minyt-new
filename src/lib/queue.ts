@@ -45,7 +45,7 @@
  */
 
 import { getDb } from './db';
-import type { MusicQueueItem, WatchQueueItem } from './types';
+import type { MusicLibraryGroup, MusicLibraryTrack, MusicQueueItem, WatchQueueItem } from './types';
 
 // =============================================================================
 // TAV-61: Queue pin helpers — pinToQueueTop / unpinFromQueue / listPinnedVideoIds
@@ -639,4 +639,55 @@ async function withPinnedMusic(
     .map(r => ({ ...r, is_pinned: false }));
 
   return [...pinnedNotInRanked, ...pinnedInRanked, ...rest].slice(0, Math.max(limit, 1));
+}
+
+// =============================================================================
+// Music library — listMusicLibrary / getMusicVideo
+// =============================================================================
+//
+// The Music queue (`buildMusicQueue`) is a ranked top-N page — great for "what
+// should play next", but it gives the user no way to browse beyond what the
+// ranking picked. These two functions back the browsable "All Music" library
+// on /music: every video from music-flagged channels (including `seen` ones —
+// a library is a catalogue, not an inbox), grouped by artist.
+
+/**
+ * List every video from music-flagged, non-hidden channels, grouped by artist
+ * (channel title A–Z, tracks newest-first within each artist). Also used by
+ * /music to resolve a `?v=` param naming a track outside the ranked queue
+ * page (e.g. clicked from the library section).
+ */
+export async function listMusicLibrary(): Promise<MusicLibraryGroup[]> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query<MusicLibraryTrack>(
+      `
+      SELECT v.video_id, v.title, v.thumbnail_url, v.duration_seconds,
+             v.published_at, c.title AS channel_title,
+             COALESCE(vs.state = 'seen', FALSE) AS is_seen
+      FROM videos v
+      JOIN channels c ON c.channel_id = v.channel_id
+      LEFT JOIN video_states vs ON vs.video_id = v.video_id
+      WHERE c.hidden = 0
+        AND c.music_flag = 1
+        AND v.is_live = 0
+      ORDER BY LOWER(c.title) ASC, v.published_at DESC NULLS LAST`,
+      [],
+    );
+
+    // Rows arrive pre-sorted (artist A–Z, then newest first), so grouping is
+    // a single ordered pass.
+    const groups: MusicLibraryGroup[] = [];
+    for (const row of rows) {
+      const last = groups[groups.length - 1];
+      if (last && last.channel_title === row.channel_title) {
+        last.tracks.push(row);
+      } else {
+        groups.push({ channel_title: row.channel_title, tracks: [row] });
+      }
+    }
+    return groups;
+  } finally {
+    client.release();
+  }
 }

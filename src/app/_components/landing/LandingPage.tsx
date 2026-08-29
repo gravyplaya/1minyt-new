@@ -15,7 +15,7 @@ const features = [
   {
     icon: "⏭",
     title: "Autoplay That Respects You",
-    desc: "When a video ends, the next one loads with a 5-second countdown you can dismiss. The choice is transparent and editable — not a black box optimizing someone else's watch time.",
+    desc: "When a video ends, it ends — nothing auto-plays. Your Up Next queue is right there when you want it, transparent and editable — not a black box optimizing someone else's watch time.",
   },
   {
     icon: "🎬",
@@ -200,7 +200,7 @@ export function LandingPage() {
       <section className="landing-stats">
         {[
           { label: "Intelligent Queue", value: "Your data" },
-          { label: "Autoplay control", value: "5s countdown" },
+          { label: "Autoplay control", value: "Off by default" },
           { label: "Reference graph", value: "Cite → play" },
         ].map((s, i) => (
           <div

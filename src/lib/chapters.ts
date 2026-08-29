@@ -37,7 +37,7 @@ export interface DetectChaptersResult {
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 // Reuse the same default model as the summarizer for consistency; override per
 // deploy via CHAPTERS_MODEL in .env.
-const DEFAULT_MODEL = process.env.CHAPTERS_MODEL?.trim() || process.env.SUMMARY_MODEL?.trim() || 'openai/gpt-oss-20b:free';
+const DEFAULT_MODEL = process.env.CHAPTERS_MODEL?.trim() || process.env.SUMMARY_MODEL?.trim() || 'openrouter/free';
 
 /** Send roughly every Nth segment to the LLM. */
 const SAMPLE_EVERY_N = 5;
