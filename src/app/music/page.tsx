@@ -1,8 +1,10 @@
 import { buildMusicQueue, listMusicLibrary } from '@/lib/queue';
+import { getVideo } from '@/lib/video-repo';
+import { computeMusicVideoPresentation } from '@/lib/music-video-pref';
 import { isConnected, getUserProfile } from '@/lib/tokens';
 import { AppShell } from '../_components/AppShell';
 import { MusicQueue, MusicLibrarySection } from '../_components/MusicQueue';
-import type { MusicQueueItem } from '@/lib/types';
+import type { MusicLibraryGroup, MusicQueueItem } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,15 +52,25 @@ export default async function MusicPage({ searchParams }: PageProps) {
     // Artist radio: play the picked track; Up Next = the rest of that
     // artist's catalogue (seen/skipped tracks excluded so skip/defer stick).
     // Prefer the queue's own row for now-playing when present — same display
-    // fields, but keeps the real score/is_pinned values.
+    // fields, but keeps the real score/is_pinned values. When the pick isn't
+    // on the queue page, hydrate its video presentation from the cached row
+    // (the library shape doesn't carry tags/category/video_pref).
     nowPlaying =
       queue.find((q) => q.video_id === libraryMatch.video_id) ??
-      { ...libraryMatch, score: 0, is_pinned: false };
+      (await hydrateLibraryTrackAsQueueItem(libraryMatch));
     const artist = library.find((g) => g.channel_title === libraryMatch.channel_title);
     orderedQueue = (artist?.tracks ?? [])
       .filter((t) => t.video_id !== libraryMatch.video_id && !t.is_seen)
       .slice(0, 19)
-      .map((t) => ({ ...t, score: 0, is_pinned: false }));
+      .map((t) => ({
+        ...t,
+        score: 0,
+        is_pinned: false,
+        // Up Next rows never render the player; compute presentation from the
+        // fields the library shape has (title + channel) so the type holds and
+        // the toggle labels stay sensible if one becomes now-playing.
+        ...presentationFromLibraryTrack(t),
+      }));
   } else if (queue.length > 0) {
     // Cold load (or an unknown/non-music ?v=): top-ranked track + ranked queue.
     nowPlaying = queue[0];
@@ -110,4 +122,50 @@ function EmptyMusicState({ connected }: { connected: boolean }) {
       </p>
     </div>
   );
+}
+
+/**
+ * TAV-62: Turn a browsable-library track into a full MusicQueueItem for
+ * now-playing. The library shape lacks tags/category/video_pref, so fetch the
+ * cached videos row once and compute the video presentation from it. Falls
+ * back to heuristic inputs already available on the track when the row is
+ * missing (deleted between renders — never in practice).
+ */
+async function hydrateLibraryTrackAsQueueItem(
+  track: MusicLibraryGroup['tracks'][number],
+): Promise<MusicQueueItem> {
+  const row = await getVideo(track.video_id);
+  const presentation = computeMusicVideoPresentation({
+    title: row?.title ?? track.title,
+    channelTitle: track.channel_title,
+    tags: row?.tags ?? null,
+    categoryId: row?.category_id ?? null,
+    videoPref: row?.video_pref ?? null,
+  });
+  return {
+    video_id: track.video_id,
+    title: track.title,
+    channel_title: track.channel_title,
+    thumbnail_url: track.thumbnail_url,
+    duration_seconds: track.duration_seconds,
+    published_at: track.published_at,
+    score: 0,
+    is_pinned: false,
+    video_pref: presentation.pref,
+    video_pref_source: presentation.source,
+  };
+}
+
+/**
+ * TAV-62: presentation fields for a library track when no cached row is
+ * fetched (Up Next rows). Title + channel cover most of the heuristic.
+ */
+function presentationFromLibraryTrack(
+  track: MusicLibraryGroup['tracks'][number],
+): Pick<MusicQueueItem, 'video_pref' | 'video_pref_source'> {
+  const { pref, source } = computeMusicVideoPresentation({
+    title: track.title,
+    channelTitle: track.channel_title,
+  });
+  return { video_pref: pref, video_pref_source: source };
 }

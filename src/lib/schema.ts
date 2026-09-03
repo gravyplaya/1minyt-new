@@ -423,6 +423,15 @@ export const SCHEMA_STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_queue_pins_queue_pos ON queue_pins(queue, position ASC, pinned_at DESC)`,
 
+  // ----- TAV-62: Per-track music video presentation -----------------------------
+  //
+  // The /music page heuristically decides whether a track shows the full 16:9
+  // video player or the minimized audio-only bar (see
+  // `computeMusicVideoPresentation` in music-video-pref.ts). This column is the
+  // user's manual override: NULL = trust the heuristic; 'video' / 'audio' = pin
+  // the presentation regardless of what the heuristic guesses. Additive ALTER
+  // because CREATE TABLE IF NOT EXISTS won't add columns to an existing table.
+  `ALTER TABLE videos ADD COLUMN IF NOT EXISTS video_pref TEXT`,
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

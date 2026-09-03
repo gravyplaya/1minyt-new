@@ -45,6 +45,7 @@
  */
 
 import { getDb } from './db';
+import { computeMusicVideoPresentation } from './music-video-pref';
 import type { MusicLibraryGroup, MusicLibraryTrack, MusicQueueItem, WatchQueueItem } from './types';
 
 // =============================================================================
@@ -214,9 +215,13 @@ async function getPinnedMusicItems(): Promise<MusicQueueItem[]> {
       thumbnail_url: string | null;
       duration_seconds: number | null;
       published_at: number | null;
+      tags: string | null;
+      category_id: number | null;
+      video_pref: string | null;
     }>(
       `SELECT v.video_id, v.title, c.title AS channel_title,
-              v.thumbnail_url, v.duration_seconds, v.published_at
+              v.thumbnail_url, v.duration_seconds, v.published_at,
+              v.tags, v.category_id, v.video_pref
        FROM queue_pins qp
        JOIN videos v ON v.video_id = qp.video_id
        JOIN channels c ON c.channel_id = v.channel_id
@@ -227,16 +232,27 @@ async function getPinnedMusicItems(): Promise<MusicQueueItem[]> {
        ORDER BY qp.position ASC, qp.pinned_at DESC`,
       [],
     );
-    return rows.map(r => ({
-      video_id: r.video_id,
-      title: r.title,
-      channel_title: r.channel_title,
-      thumbnail_url: r.thumbnail_url,
-      duration_seconds: r.duration_seconds,
-      published_at: r.published_at,
-      score: 1,
-      is_pinned: true,
-    }));
+    return rows.map(r => {
+      const presentation = computeMusicVideoPresentation({
+        title: r.title,
+        channelTitle: r.channel_title,
+        tags: r.tags,
+        categoryId: r.category_id,
+        videoPref: r.video_pref,
+      });
+      return {
+        video_id: r.video_id,
+        title: r.title,
+        channel_title: r.channel_title,
+        thumbnail_url: r.thumbnail_url,
+        duration_seconds: r.duration_seconds,
+        published_at: r.published_at,
+        score: 1,
+        is_pinned: true,
+        video_pref: presentation.pref,
+        video_pref_source: presentation.source,
+      };
+    });
   } finally {
     client.release();
   }
@@ -522,6 +538,9 @@ export async function buildMusicQueue(
       thumbnail_url: string | null;
       duration_seconds: number | null;
       published_at: number | null;
+      tags: string | null;
+      category_id: number | null;
+      video_pref: string | null;
       raw_score: number;
     }>(
       `
@@ -542,7 +561,7 @@ export async function buildMusicQueue(
       scored AS (
         SELECT
           v.video_id, v.title, v.thumbnail_url, v.duration_seconds,
-          v.published_at, v.channel_id,
+          v.published_at, v.channel_id, v.tags, v.category_id, v.video_pref,
           c.title AS channel_title,
 
           -- channel_affinity: capped bonus, weight 1.0.
@@ -601,16 +620,27 @@ export async function buildMusicQueue(
       ? Math.max(...rows.map(r => r.raw_score ?? 0), 1e-9)
       : 1;
 
-    const ranked: MusicQueueItem[] = rows.map(r => ({
-      video_id: r.video_id,
-      title: r.title,
-      channel_title: r.channel_title,
-      thumbnail_url: r.thumbnail_url,
-      duration_seconds: r.duration_seconds,
-      published_at: r.published_at,
-      score: (r.raw_score ?? 0) / maxScore,
-      is_pinned: false,
-    }));
+    const ranked: MusicQueueItem[] = rows.map(r => {
+      const presentation = computeMusicVideoPresentation({
+        title: r.title,
+        channelTitle: r.channel_title,
+        tags: r.tags,
+        categoryId: r.category_id,
+        videoPref: r.video_pref,
+      });
+      return {
+        video_id: r.video_id,
+        title: r.title,
+        channel_title: r.channel_title,
+        thumbnail_url: r.thumbnail_url,
+        duration_seconds: r.duration_seconds,
+        published_at: r.published_at,
+        score: (r.raw_score ?? 0) / maxScore,
+        is_pinned: false,
+        video_pref: presentation.pref,
+        video_pref_source: presentation.source,
+      };
+    });
 
     // TAV-61: prepend pinned tracks so they survive the force-dynamic re-fetch.
     return withPinnedMusic(ranked, lim);

@@ -19,6 +19,13 @@
  *
  * Mirrors the WatchQueue control surface but without the countdown overlay or
  * the AI tooling (no TL;DR, no key points, no chapters, no chat, no references).
+ *
+ * TAV-62: Video presentation. Each track carries a server-computed
+ * `video_pref` ('video' | 'audio') from the heuristic + `videos.video_pref`
+ * override (see music-video-pref.ts). 'video' tracks render the full 16:9
+ * player above the Now Playing panel; 'audio' tracks keep the minimized bar.
+ * The Now Playing panel exposes Show video / Audio only toggles that persist
+ * via `setMusicVideoPrefAction` and survive re-renders and queue advances.
  */
 
 import Link from 'next/link';
@@ -32,6 +39,7 @@ import {
   pinToQueueTopAction,
   pinMultipleToQueueTopAction,
   deferToLaterQueueAction,
+  setMusicVideoPrefAction,
 } from '@/app/actions';
 import { formatRelative, formatDuration, youtubeVideoUrl } from '../_lib/format';
 
@@ -174,14 +182,65 @@ export function MusicQueue({ queue, nowPlaying, library }: MusicQueueProps) {
     });
   };
 
+  // TAV-62: optimistic presentation for the current track. The server-computed
+  // value is the baseline; clicking Show video / Audio only flips a local
+  // override immediately (the player switches without waiting for the server)
+  // and persists via setMusicVideoPrefAction. Keyed on videoId so advancing to
+  // the next track resets to its own server-computed presentation.
+  const [localPrefOverride, setLocalPrefOverride] = useState<'video' | 'audio' | null>(null);
+  // Reset on track change via the same cancelled-flag microtask pattern the
+  // localQueue sync above uses (avoids synchronous setState-in-effect).
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve().then(() => { if (!cancelled) setLocalPrefOverride(null); });
+    return () => { cancelled = true; };
+  }, [videoId]);
+
+  const serverPref = nowPlaying.video_pref;
+  const effectivePref: 'video' | 'audio' = localPrefOverride ?? serverPref;
+  const prefSource = nowPlaying.video_pref_source;
+
+  const handleSetVideoPref = (pref: 'video' | 'audio') => {
+    if (pref === effectivePref) return;
+    setLocalPrefOverride(pref);
+    startTransition(async () => {
+      const result = await setMusicVideoPrefAction(videoId, pref);
+      if (!result.ok) {
+        // Persist failed — snap back to the server-computed presentation.
+        setLocalPrefOverride(null);
+      }
+      router.refresh();
+    });
+  };
+
+  // Clicking the already-active mode clears a stored override (back to the
+  // automatic heuristic). No override stored → no-op.
+  const handleToggleVideoPref = (pref: 'video' | 'audio') => {
+    if (pref !== effectivePref) {
+      handleSetVideoPref(pref);
+      return;
+    }
+    if (localPrefOverride !== null || prefSource === 'override') {
+      setLocalPrefOverride(null);
+      startTransition(async () => {
+        // Clearing may fail — refresh re-syncs the buttons to whatever the
+        // server actually has rather than showing a phantom "auto" state.
+        await setMusicVideoPrefAction(videoId, null);
+        router.refresh();
+      });
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Minimized player — audio-only bar. Autoplays: clicking a track or
-          auto-advancing should start playback without a second click. */}
+      {/* Player — TAV-62: full 16:9 for 'video' tracks, minimized audio-only
+          bar for 'audio' tracks. The server computes per-track presentation
+          (heuristic + user override); the IFrame keeps playing across switches
+          because YouTubePlayer keeps the player mounted in both modes. */}
       <YouTubePlayer
         key={videoId}
         videoId={videoId}
-        minimize
+        minimize={effectivePref === 'audio'}
         title={nowPlaying.title}
         thumbnailUrl={nowPlaying.thumbnail_url}
         onReady={onPlayerReady}
@@ -285,6 +344,65 @@ export function MusicQueue({ queue, nowPlaying, library }: MusicQueueProps) {
                 </a>
               </div>
             </div>
+          </div>
+
+          {/* TAV-62: presentation toggle — Show video / Audio only. The active
+              mode matches the player above; clicking the active mode again
+              clears a stored override (back to the automatic heuristic). */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => handleToggleVideoPref('video')}
+              aria-pressed={effectivePref === 'video'}
+              title={
+                effectivePref === 'video'
+                  ? 'Showing video. Click to clear and return to automatic.'
+                  : 'Show the video for this track'
+              }
+              style={{
+                fontSize: 12,
+                padding: '4px 10px',
+                borderColor: effectivePref === 'video' ? '#5b9eff' : undefined,
+                color: effectivePref === 'video' ? '#cfe4ff' : undefined,
+                background: effectivePref === 'video' ? 'rgba(91,158,255,0.12)' : undefined,
+              }}
+            >
+              🎬 Show video
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => handleToggleVideoPref('audio')}
+              aria-pressed={effectivePref === 'audio'}
+              title={
+                effectivePref === 'audio'
+                  ? 'Audio only. Click to clear and return to automatic.'
+                  : 'Collapse to the audio-only bar'
+              }
+              style={{
+                fontSize: 12,
+                padding: '4px 10px',
+                borderColor: effectivePref === 'audio' ? '#5b9eff' : undefined,
+                color: effectivePref === 'audio' ? '#cfe4ff' : undefined,
+                background: effectivePref === 'audio' ? 'rgba(91,158,255,0.12)' : undefined,
+              }}
+            >
+              🎧 Audio only
+            </button>
+            <span
+              style={{
+                fontSize: 11,
+                color: '#5a5a64',
+              }}
+              title={
+                prefSource === 'override'
+                  ? 'You set this manually for this track.'
+                  : 'Chosen automatically from the title and channel.'
+              }
+            >
+              {prefSource === 'override' ? 'manually set' : 'auto'}
+            </span>
           </div>
 
           {/* Browsable library — every track from music-flagged channels, so

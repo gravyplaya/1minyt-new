@@ -123,6 +123,11 @@ export interface VideoRow {
   is_live: 0 | 1;
   /** JSON-encoded liveStreamingDetails object. */
   live_streaming_details: string | null;
+  /**
+   * TAV-62: User's per-track music video presentation override — 'video' /
+   * 'audio' when set, NULL to trust the heuristic (see music-video-pref.ts).
+   */
+  video_pref: string | null;
 }
 
 export interface FollowUp {
@@ -396,6 +401,15 @@ export interface MusicQueueItem {
    * `queue_pins`. Source of truth for the pin/unpin toggle.
    */
   is_pinned: boolean;
+  /**
+   * TAV-62: How the track presents on /music — 'video' renders the full 16:9
+   * player, 'audio' the minimized bar. Precomputed server-side via
+   * `computeMusicVideoPresentation` (heuristic + `videos.video_pref` override)
+   * so the client never re-implements the heuristic.
+   */
+  video_pref: MusicVideoPref;
+  /** 'override' when the user set `videos.video_pref`, 'heuristic' otherwise. */
+  video_pref_source: MusicVideoPrefSource;
 }
 
 /**
@@ -423,6 +437,14 @@ export interface MusicLibraryGroup {
   channel_title: string;
   tracks: MusicLibraryTrack[];
 }
+
+// ----- TAV-62: Music track video presentation ---------------------------------
+
+/** How a music track presents on /music: full 16:9 video player or audio bar. */
+export type MusicVideoPref = 'video' | 'audio';
+
+/** Whether the presentation came from the user's per-track override or the heuristic. */
+export type MusicVideoPrefSource = 'override' | 'heuristic';
 
 // ----- TAV-26: Curated channel playlists -------------------------------------
 

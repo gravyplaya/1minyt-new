@@ -418,6 +418,41 @@ export async function toggleBookmarkAction(videoId: string): Promise<BookmarkOut
   }
 }
 
+// ----- TAV-62: Music track video presentation override -------------------------
+
+export interface MusicVideoPrefOutcome {
+  ok: boolean;
+  videoId: string;
+  pref: 'video' | 'audio' | null;
+  error?: string;
+}
+
+/**
+ * TAV-62: Set or clear the per-track music video presentation override
+ * (`videos.video_pref`). `pref: null` clears the override so the heuristic in
+ * `computeMusicVideoPresentation` applies again. Non-music uses are harmless —
+ * the column only affects the /music player's presentation. Unvalidated values
+ * are rejected here rather than stored (they'd silently fall through to the
+ * default in computeMusicVideoPresentation).
+ */
+export async function setMusicVideoPrefAction(
+  videoId: string,
+  pref: 'video' | 'audio' | null,
+): Promise<MusicVideoPrefOutcome> {
+  if (pref !== 'video' && pref !== 'audio' && pref !== null) {
+    return { ok: false, videoId, pref: null, error: 'Invalid video preference. Use "video", "audio", or null.' };
+  }
+  try {
+    const { setVideoPref } = await import('@/lib/video-repo');
+    await setVideoPref(videoId, pref);
+    revalidatePath('/music');
+    return { ok: true, videoId, pref };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, videoId, pref: null, error: msg };
+  }
+}
+
 // ----- TAV-5: Chat with Video (RAG over transcripts) -------------------------
 
 export interface IndexOutcome {

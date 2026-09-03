@@ -11,7 +11,7 @@ import type { RssVideoEntry } from './youtube';
 
 const SUMMARY_MODEL_KEY = process.env.SUMMARY_MODEL?.trim() || 'openai/gpt-oss-20b:free';
 
-export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcript_status' | 'transcript_fetched_at' | 'transcript_source' | 'created_at' | 'updated_at'> & {
+export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcript_status' | 'transcript_fetched_at' | 'transcript_source' | 'video_pref' | 'created_at' | 'updated_at'> & {
   transcript?: string | null;
   transcript_status?: TranscriptStatus;
   transcript_fetched_at?: number | null;
@@ -198,6 +198,22 @@ export async function setTranscriptStatus(videoId: string, status: TranscriptSta
   const client = await getDb();
   try {
     await client.query('UPDATE videos SET transcript_status = $1, updated_at = $2 WHERE video_id = $3', [status, now, videoId]);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * TAV-62: Store the user's per-track music video presentation override.
+ * `pref` null clears the override so the heuristic applies again. The value
+ * is validated by the caller (server action); invalid values stored here
+ * would silently fall through `computeMusicVideoPresentation` to the default.
+ */
+export async function setVideoPref(videoId: string, pref: 'video' | 'audio' | null): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const client = await getDb();
+  try {
+    await client.query('UPDATE videos SET video_pref = $1, updated_at = $2 WHERE video_id = $3', [pref, now, videoId]);
   } finally {
     client.release();
   }

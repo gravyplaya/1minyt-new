@@ -60,6 +60,11 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptResult
     if (viaSupadata && viaSupadata.text.trim().length > 40) {
       return { text: viaSupadata.text, source: 'supadata', length: viaSupadata.text.length, segments: viaSupadata.segments };
     }
+  } else {
+    // Only reachable when Innertube already failed — exactly the situation where
+    // a missing key silently narrows the fallback chain (e.g. on Netlify, where
+    // Innertube often fails from datacenter IPs and yt-dlp doesn't exist).
+    console.warn(`fetchTranscript: Supadata skipped for ${videoId} — SUPADATA_API_KEY not configured.`);
   }
 
   // 3. yt-dlp fallback. Handles age-restricted / consent-wall edge cases that
@@ -148,7 +153,10 @@ async function fetchViaInnertube(videoId: string): Promise<ParsedTranscript | nu
     body: JSON.stringify(payload),
   });
 
-  if (!resp.ok) return null;
+  if (!resp.ok) {
+    console.warn(`fetchViaInnertube: player API HTTP ${resp.status} for ${videoId}`);
+    return null;
+  }
 
   const data = (await resp.json()) as {
     playabilityStatus?: { status?: string; reason?: string };
