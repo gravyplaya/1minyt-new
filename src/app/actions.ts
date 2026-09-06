@@ -29,6 +29,10 @@ import { getValidAccessToken } from '@/lib/tokens';
 import { detectChapters } from '@/lib/chapters';
 import { indexVideo, indexSummary, isIndexed, chunkCount, searchAcross, getSegments } from '@/lib/vector-store';
 import { chatWithVideo } from '@/lib/chat';
+import { chatWithLibrary, chatWithLibraryAgent, parseScope } from '@/lib/library-chat';
+import { saveLibraryChatMessage, listLibraryChatMessages, clearLibraryChat } from '@/lib/library-chat-repo';
+import { generateChannelDossier as generateDossier, loadDossier } from '@/lib/dossier';
+import { buildTopicGraph } from '@/lib/topics';
 import { friendlyError } from '@/lib/errors';
 import type { Chapter, ChatCitation, ChatMessage, ChannelCatalogHit, CommunityPulse, IncomingReference, MostReferencedVideo, PlaylistRow, PlaylistSummary, PlaylistVideoRow, SummaryRow, TranscriptSegment, TranscriptSource, VideoWithSummary, TranscriptSearchResult, VideoReferenceWithTarget } from '@/lib/types';
 
@@ -1348,6 +1352,160 @@ export async function deferToLaterQueueAction(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, videoId, queue, error: msg };
+  }
+}
+
+// ----- TAV-63: Library-wide chat (E) + scoped chat (F) + agent (H) -------------
+
+export interface ChatWithLibraryOutcome {
+  ok: boolean;
+  scope: string;
+  answer?: string;
+  citations?: import('@/lib/types').LibraryChatCitation[];
+  model?: string;
+  messages?: import('@/lib/types').LibraryChatMessage[];
+  /** H: tool-call labels when Deep Research mode ran. */
+  toolCalls?: string[];
+  error?: string;
+}
+
+/**
+ * One turn of library chat. `scope` is 'all' | 'channel:<id>' | 'folder:<id>'
+ * | 'tag:<id>'. `deepResearch` switches to the agentic tool loop (H) instead
+ * of the single-shot RAG path (E).
+ */
+export async function chatWithLibraryAction(
+  scope: string,
+  question: string,
+  deepResearch = false,
+): Promise<ChatWithLibraryOutcome> {
+  const q = question.trim();
+  if (!q) return { ok: false, scope, error: 'Empty question.' };
+  try {
+    // Validate the scope id early so a garbage id fails before we spend tokens.
+    const parsed = parseScope(scope);
+    if (parsed.kind !== 'all' && !parsed.id) {
+      return { ok: false, scope, error: 'Invalid scope.' };
+    }
+
+    const history = await listLibraryChatMessages(scope, 20);
+    await saveLibraryChatMessage({ scope, role: 'user', content: q });
+
+    const result = deepResearch
+      ? await chatWithLibraryAgent({ question: q, scope, history })
+      : await chatWithLibrary({ question: q, scope, history });
+
+    await saveLibraryChatMessage({
+      scope,
+      role: 'assistant',
+      content: result.answer,
+      toolTrace: deepResearch && result.toolCalls.length > 0 ? JSON.stringify(result.toolCalls) : null,
+    });
+
+    const messages = await listLibraryChatMessages(scope, 50);
+
+    return {
+      ok: true,
+      scope,
+      answer: result.answer,
+      citations: result.citations,
+      model: result.model,
+      toolCalls: result.toolCalls,
+      messages,
+    };
+  } catch (err) {
+    return { ok: false, scope, error: friendlyError(err) };
+  }
+}
+
+export async function loadLibraryChatHistoryAction(scope: string): Promise<import('@/lib/types').LibraryChatMessage[]> {
+  return listLibraryChatMessages(scope, 50);
+}
+
+export async function clearLibraryChatAction(scope: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await clearLibraryChat(scope);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: friendlyError(err) };
+  }
+}
+
+/**
+ * Aggregate index stats for the /chat status line: how many videos have been
+ * indexed for chat, how many chunks exist, and how many videos have summaries.
+ */
+export async function libraryChatStatusAction(): Promise<import('@/lib/types').LibraryChatStatus> {
+  const { query } = await import('@/lib/db');
+  try {
+    const [chunks, summaries] = await Promise.all([
+      query(
+        `SELECT COUNT(*) AS chunk_count, COUNT(DISTINCT video_id) AS video_count
+         FROM transcript_chunks WHERE chunk_type = 'transcript'`,
+      ),
+      query('SELECT COUNT(DISTINCT video_id) AS n FROM summaries'),
+    ]);
+    return {
+      indexedVideos: Number(chunks.rows[0]?.video_count ?? 0),
+      chunkCount: Number(chunks.rows[0]?.chunk_count ?? 0),
+      summarizedVideos: Number(summaries.rows[0]?.n ?? 0),
+    };
+  } catch {
+    return { indexedVideos: 0, chunkCount: 0, summarizedVideos: 0 };
+  }
+}
+
+/** Scope options for the /chat picker: folders, tags, channels in one payload. */
+export async function listChatScopeOptionsAction(): Promise<import('@/lib/types').ChatScopeOptions> {
+  const [folders, tags, channels] = await Promise.all([
+    import('@/lib/repo').then(m => m.listFolders()),
+    import('@/lib/repo').then(m => m.listTags()),
+    import('@/lib/repo').then(m => m.listChannels({ includeMusic: true, hidden: true, sort: 'alpha' })),
+  ]);
+  return {
+    folders: folders.map(f => ({ id: f.id, name: f.name })),
+    tags: tags.map(t => ({ id: t.id, name: t.name })),
+    channels: channels.map(c => ({ id: c.channel_id, title: c.title })),
+  };
+}
+
+// ----- TAV-64: Channel dossier actions -----------------------------------------
+
+export interface DossierOutcome {
+  ok: boolean;
+  channelId: string;
+  dossier?: import('@/lib/types').ChannelDossier;
+  error?: string;
+}
+
+/** Generate (or regenerate) a channel's dossier from its cached summaries. */
+export async function generateChannelDossierAction(channelId: string): Promise<DossierOutcome> {
+  try {
+    const dossier = await generateDossier(channelId);
+    return { ok: true, channelId, dossier };
+  } catch (err) {
+    return { ok: false, channelId, error: friendlyError(err) };
+  }
+}
+
+export async function getChannelDossierAction(channelId: string): Promise<DossierOutcome> {
+  try {
+    const dossier = await loadDossier(channelId);
+    return dossier
+      ? { ok: true, channelId, dossier }
+      : { ok: false, channelId, error: 'No dossier generated yet.' };
+  } catch (err) {
+    return { ok: false, channelId, error: friendlyError(err) };
+  }
+}
+
+// ----- TAV-66: Topic mind map ----------------------------------------------------
+
+export async function getTopicGraphAction(): Promise<import('@/lib/types').TopicGraph> {
+  try {
+    return await buildTopicGraph();
+  } catch {
+    return { nodes: [], edges: [], summarizedVideos: 0, generatedAt: Math.floor(Date.now() / 1000) };
   }
 }
 

@@ -585,3 +585,111 @@ export interface MostReferencedVideo {
   /** How many distinct source videos cite this video. */
   reference_count: number;
 }
+
+// ----- TAV-63/64/65: Library chat (E), scoped chat (F), channel memory (G), agent (H)
+
+/**
+ * A library-chat scope — what corpus the question is grounded in.
+ * Serialized over the wire as a string: 'all', 'channel:<id>', 'folder:<id>'
+ * or 'tag:<id>' (see parseScope in library-chat.ts).
+ */
+export type ChatScopeKind = 'all' | 'channel' | 'folder' | 'tag';
+
+/** Scope options for the /chat picker: folders, tags, channels in one payload. */
+export interface ChatScopeOptions {
+  folders: Array<{ id: string; name: string }>;
+  tags: Array<{ id: string; name: string }>;
+  channels: Array<{ id: string; title: string }>;
+}
+
+/** A message in a library-chat thread. */
+export interface LibraryChatMessage {
+  id: string;
+  scope: string;
+  role: ChatRole;
+  content: string;
+  /** H: JSON-encoded tool-call trace when the message came from Deep Research mode. */
+  tool_trace: string | null;
+  created_at: number;
+}
+
+/** A citation from library chat — points at a moment inside a specific video. */
+export interface LibraryChatCitation {
+  videoId: string;
+  videoTitle: string;
+  channelTitle: string;
+  startMs: number;
+  endMs: number | null;
+  /** The matched chunk text ('transcript' or 'summary' chunk). */
+  text: string;
+  chunkType: 'transcript' | 'summary';
+}
+
+/** Result of one library-chat turn (standard or Deep Research mode). */
+export interface LibraryChatResult {
+  answer: string;
+  citations: LibraryChatCitation[];
+  model: string;
+  /** H: short labels of the tools the agent invoked, e.g. "search_transcripts('x')". */
+  toolCalls: string[];
+}
+
+/** Aggregate index stats for the /chat status line. */
+export interface LibraryChatStatus {
+  indexedVideos: number;
+  chunkCount: number;
+  summarizedVideos: number;
+}
+
+// ----- TAV-64: Channel dossier ------------------------------------------------
+
+/** A channel's LLM-distilled "memory" dossier (TAV-64). */
+export interface ChannelDossier {
+  channel_id: string;
+  model: string;
+  /** 3-6 paragraph distillation of what the channel covers and how it thinks. */
+  dossier: string;
+  /** 5-8 recurring themes (lowercase strings). */
+  themes: string[];
+  /** How many video summaries the dossier was distilled from. */
+  video_count: number;
+  token_count: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+// ----- TAV-66: Topic mind map ---------------------------------------------------
+
+/** One topic node in the topic graph (I). */
+export interface TopicNode {
+  /** Normalized topic label (lowercase). */
+  topic: string;
+  /** How many summarized videos carry this topic. */
+  videoCount: number;
+  /** How many distinct channels cover this topic. */
+  channelCount: number;
+  /** A sample of videos for the node's detail panel (capped). */
+  videos: Array<{
+    videoId: string;
+    title: string;
+    channelId: string;
+    channelTitle: string;
+  }>;
+}
+
+/** A co-occurrence edge between two topics that appear in the same video. */
+export interface TopicEdge {
+  a: string;
+  b: string;
+  /** Number of videos carrying both topics. */
+  weight: number;
+}
+
+/** The whole topic graph, computed live from cached summaries. */
+export interface TopicGraph {
+  nodes: TopicNode[];
+  edges: TopicEdge[];
+  /** Total summarized videos the graph was built from. */
+  summarizedVideos: number;
+  generatedAt: number;
+}

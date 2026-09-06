@@ -412,3 +412,107 @@ export async function summarizeComments(input: CommentSummarizeInput): Promise<C
   if (!summary) throw new Error('OpenRouter returned an empty comment summary.');
   return { summary, model };
 }
+
+// ----- TAV-64: Channel dossier synthesis ---------------------------------------
+
+export interface ChannelDossierInput {
+  channelTitle: string;
+  /** Per-video summaries cached locally (TL;DR + key points). */
+  videoSummaries: Array<{ title: string; tldr: string; key_points: string[]; topics: string[] }>;
+}
+
+export interface ChannelDossierResult {
+  dossier: string;
+  themes: string[];
+  model: string;
+  tokenCount: number | null;
+}
+
+const MAX_DOSSIER_CHARS = 16_000;
+
+/**
+ * Distill a channel's cached per-video summaries into a single "dossier" —
+ * a memory layer the library chat injects when scoped to this channel
+ * (TAV-64, option G). Map-reduce style: per-video TL;DRs are already
+ * distilled; this is the one reduce call.
+ *
+ * Returns a JSON object: "dossier" (3-6 paragraphs of what the channel
+ * covers, its perspective, and recurring formats) and "themes" (5-8 lowercase
+ * recurring themes).
+ */
+export async function synthesizeChannelDossier(input: ChannelDossierInput): Promise<ChannelDossierResult> {
+  const apiKey = process.env.OPENROUTER_API_KEY?.trim();
+  if (!apiKey) throw new Error('Missing OPENROUTER_API_KEY — set it in .env to enable dossiers.');
+
+  const model = DEFAULT_MODEL;
+  const usable = input.videoSummaries.slice(0, 40);
+  const block = usable.map(v =>
+    `### ${v.title}\nTL;DR: ${v.tldr}\nKey points: ${(v.key_points ?? []).join('; ')}`,
+  ).join('\n\n');
+  const trimmed = truncate(block, MAX_DOSSIER_CHARS);
+
+  const prompt = [
+    `Channel: ${input.channelTitle}`,
+    '',
+    'TL;DRs of this channel\'s recent videos:',
+    '"""',
+    trimmed || '(no summaries available yet)',
+    '"""',
+    '',
+    'Produce a JSON object with exactly these keys:',
+    '- "dossier": 3-6 paragraphs distilling what this channel covers overall — its beat, perspective, recurring formats and series, and what a viewer following it long-term absorbs. Plain text, no markdown headings. Refer to the channel in third person.',
+    '- "themes": 5-8 recurring themes across its videos (array of short lowercase strings, no punctuation).',
+  ].join('\n');
+
+  const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a channel analyst. You read per-video summaries of a YouTube channel and distill a long-term profile of what the channel covers and how it thinks. You return ONLY a JSON object. Never include prose outside the JSON.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`OpenRouter dossier synthesis failed (${res.status}): ${detail.slice(0, 400)}`);
+  }
+
+  const data = (await res.json()) as {
+    choices: Array<{ message: { content: string } }>;
+    usage?: { total_tokens?: number };
+  };
+
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('OpenRouter returned an empty dossier.');
+
+  let raw: { dossier?: unknown; themes?: unknown };
+  try {
+    raw = JSON.parse(content) as typeof raw;
+  } catch {
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Dossier synthesizer returned non-JSON content.');
+    raw = JSON.parse(match[0]) as typeof raw;
+  }
+
+  const dossier = typeof raw.dossier === 'string' ? raw.dossier.trim() : '';
+  if (!dossier) throw new Error('Dossier synthesizer returned an empty dossier.');
+
+  const themes: string[] = Array.isArray(raw.themes)
+    ? raw.themes.map(String).map(s => s.trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  return { dossier, themes, model, tokenCount: data.usage?.total_tokens ?? null };
+}

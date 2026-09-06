@@ -423,6 +423,46 @@ export const SCHEMA_STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_queue_pins_queue_pos ON queue_pins(queue, position ASC, pinned_at DESC)`,
 
+  // ----- TAV-63: Library-wide chat (E) + scoped chat (F) ---------------------
+  //
+  // Conversation history for the /chat surface, keyed by a scope string rather
+  // than a video id: 'all' (whole library), 'channel:<id>', 'folder:<id>' or
+  // 'tag:<id>'. Each scope keeps its own thread so switching scopes doesn't
+  // leak context across collections.
+  `CREATE TABLE IF NOT EXISTS library_chat_messages (
+    id         TEXT PRIMARY KEY,
+    scope      TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_library_chat_scope ON library_chat_messages(scope, created_at)`,
+
+  // ----- TAV-64: Channel dossier — per-channel "memory" layer (G) ------------
+  //
+  // One row per channel holding an LLM-distilled dossier: what the channel
+  // covers, its perspective, recurring formats, and signature themes. Built
+  // map-reduce style from the channel's cached per-video summaries and injected
+  // into the library-chat system prompt when the chat is scoped to that
+  // channel. Re-generating upserts by channel_id.
+  `CREATE TABLE IF NOT EXISTS channel_dossiers (
+    channel_id  TEXT PRIMARY KEY REFERENCES channels(channel_id) ON DELETE CASCADE,
+    model       TEXT NOT NULL,
+    dossier     TEXT NOT NULL,
+    themes      TEXT NOT NULL DEFAULT '[]',
+    video_count INTEGER NOT NULL DEFAULT 0,
+    token_count INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  )`,
+
+  // ----- TAV-65: Agentic library chat trace (H) -------------------------------
+  //
+  // When Deep Research mode runs, we persist which tools the agent called so
+  // the UI can show the retrieval trace next to the answer.
+  `ALTER TABLE library_chat_messages ADD COLUMN IF NOT EXISTS tool_trace TEXT`,
+
   // ----- TAV-62: Per-track music video presentation -----------------------------
   //
   // The /music page heuristically decides whether a track shows the full 16:9

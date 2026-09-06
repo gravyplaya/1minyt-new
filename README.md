@@ -30,6 +30,22 @@ the data model and UI in this repo.
   seconds. Transcripts and summaries are cached, so re-clicks are instant.
 - **Chat with Video (TAV-5):** ask questions about a video grounded in its
   transcript via RAG — answers include timestamp citations.
+- **Chat with Your Library (TAV-63):** ask anything across *every* indexed
+  video at once. Retrieval runs over all transcript + summary chunks, and the
+  scope picker narrows it to a folder, tag, or single channel — "chat with my
+  Tech folder". Answers cite the video, channel, and timestamp.
+- **Deep Research agent (TAV-65):** agent mode gives the model its own tools
+  (`search_transcripts`, `search_summaries`, `list_channels`,
+  `get_channel_profile`) so it can plan multi-step research over your
+  subscriptions before answering. The tool calls it made are shown under each
+  answer.
+- **Channel Memory (TAV-64):** distill any channel's cached summaries into a
+  long-term dossier (beat, perspective, recurring themes) that library chat
+  injects as context when you ask about that channel.
+- **Topic Mind Map (TAV-66):** every summary's topic tags feed a living topic
+  graph — force-directed, interactive, with co-occurrence edges — so you can
+  see what your subscriptions collectively talk about and jump from a topic
+  straight to its videos.
 - **Metrics dashboard (TAV-6):** see your most-engaged channels, videos, and
   topics.
 
@@ -141,6 +157,8 @@ summaries              one per (video, model) — LLM-generated TL;DR + key poin
 transcript_segments    timestamped caption cues for chat RAG
 transcript_chunks      embedded chunks for vector search (BYTEA embeddings)
 chat_messages          conversation history per video
+library_chat_messages  /chat threads, one per scope ('all', 'channel:<id>', ...)
+channel_dossiers       per-channel LLM "memory" distilled from its summaries
 ```
 
 ## Verify
@@ -166,8 +184,10 @@ pnpm run build      # Next.js production build
 └── src/
     ├── app/
     │   ├── page.tsx        # main UI (sidebar + list)
-    │   ├── actions.ts      # server actions (sync, CRUD)
+    │   ├── actions.ts      # server actions (sync, CRUD, chat, topics)
     │   ├── c/[id]/page.tsx # channel detail / editor
+    │   ├── chat/page.tsx   # library-wide chat (scoped, agent mode)
+    │   ├── topics/page.tsx # topic mind map
     │   ├── metrics/page.tsx# metrics dashboard
     │   ├── api/
     │   │   ├── oauth/start/   # kicks off Google consent
@@ -187,8 +207,12 @@ pnpm run build      # Next.js production build
         ├── vector-store.ts    # local vector store for RAG (async)
         ├── embeddings.ts      # local hashing vectorizer
         ├── transcript.ts      # YouTube transcript fetcher
-        ├── summarize.ts       # LLM summarizer
-        ├── chat.ts            # RAG chat over transcripts
+        ├── summarize.ts       # LLM summarizer (+ playlist, dossier synthesis)
+        ├── chat.ts            # RAG chat over a single video's transcript
+        ├── library-chat.ts    # library-wide chat: scoped RAG + agent tool loop
+        ├── library-chat-repo.ts # /chat threads + channel dossier storage
+        ├── dossier.ts         # channel "memory" orchestration (TAV-64)
+        ├── topics.ts          # topic graph builder for the mind map (TAV-66)
         ├── music-classifier.ts# music / not-music heuristic
         ├── types.ts           # shared domain types
         └── id.ts              # ULID-ish generator

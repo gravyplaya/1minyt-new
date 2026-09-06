@@ -344,6 +344,109 @@ export async function searchAcross(
   }
 }
 
+// ----- library-wide scoped search (TAV-63, E + F) ----------------------------
+
+/** Optional filters for library-wide retrieval. Undefined/null = no filter. */
+export interface LibrarySearchOpts {
+  /** Restrict to one channel's chunks. */
+  channelId?: string | null;
+  /** Restrict to channels filed in this folder (channel_folders join). */
+  folderId?: string | null;
+  /** Restrict to channels carrying this tag (channel_tags join). */
+  tagId?: string | null;
+  /** 'transcript' | 'summary' — omit for both. */
+  chunkType?: 'transcript' | 'summary' | null;
+}
+
+/**
+ * Search across the whole (or scoped) library like `searchAcross`, but with
+ * folder/tag/chunk-type filters so /chat can ground answers in a collection —
+ * "chat with my Tech folder", "search only this channel's summaries".
+ *
+ * Filters are pushed into SQL so cosine scoring only runs over the matching
+ * rows. Scale is the same as `searchAcross` (hundreds to low-thousands of
+ * chunks), scored in JS.
+ */
+export async function searchLibrary(
+  query: string,
+  k = 20,
+  opts: LibrarySearchOpts = {},
+): Promise<TranscriptSearchResult[]> {
+  const client = await getDb();
+  try {
+    const params: (string | Buffer)[] = [];
+    const joins: string[] = [];
+    const where: string[] = [];
+
+    if (opts.channelId) {
+      params.push(opts.channelId);
+      where.push(`v.channel_id = $${params.length}`);
+    }
+    if (opts.folderId) {
+      params.push(opts.folderId);
+      joins.push('JOIN channel_folders cf ON cf.channel_id = c.channel_id AND cf.folder_id = $' + params.length);
+      where.push('c.hidden = 0');
+    }
+    if (opts.tagId) {
+      params.push(opts.tagId);
+      joins.push('JOIN channel_tags ct ON ct.channel_id = c.channel_id AND ct.tag_id = $' + params.length);
+      where.push('c.hidden = 0');
+    }
+    if (opts.chunkType) {
+      params.push(opts.chunkType);
+      where.push(`tc.chunk_type = $${params.length}`);
+    }
+
+    const { rows } = await client.query(
+      `SELECT tc.text, tc.start_ms, tc.end_ms, tc.embedding, tc.chunk_type,
+              v.video_id, v.title AS video_title, v.channel_id,
+              c.title AS channel_title
+       FROM transcript_chunks tc
+       JOIN videos v   ON v.video_id = tc.video_id
+       JOIN channels c  ON c.channel_id = v.channel_id
+       ${joins.join('\n       ')}
+       ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+       ORDER BY tc.video_id, tc.chunk_index`,
+      params,
+    );
+
+    if (rows.length === 0) return [];
+
+    const queryVec = embedQuery(query);
+
+    const scored: TranscriptSearchResult[] = rows.map((row: {
+      text: string;
+      start_ms: number;
+      end_ms: number | null;
+      embedding: Buffer;
+      chunk_type: string;
+      video_id: string;
+      video_title: string;
+      channel_id: string;
+      channel_title: string;
+    }) => {
+      const chunkVec = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+      const score = cosineSim(queryVec, chunkVec);
+      return {
+        videoId: row.video_id,
+        videoTitle: row.video_title,
+        channelId: row.channel_id,
+        channelTitle: row.channel_title,
+        chunkText: row.text,
+        startMs: row.start_ms,
+        endMs: row.end_ms,
+        score,
+        chunkType: row.chunk_type === 'summary' ? 'summary' : 'transcript',
+      };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, k);
+  } finally {
+    client.release();
+  }
+}
+
 // ----- segment persistence ----------------------------------------------------
 
 /** Save timestamped segments to Postgres (idempotent — replaces prior rows). */
