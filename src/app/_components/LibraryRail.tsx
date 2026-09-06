@@ -18,7 +18,7 @@ const railHeading: React.CSSProperties = {
   fontWeight: 600,
 };
 
-export type LibraryCollection = 'saved' | 'liked' | 'history' | 'summarized' | 'summarize-later' | 'metrics';
+export type LibraryCollection = 'saved' | 'liked' | 'history' | 'summarized' | 'summarize-later' | 'metrics' | 'chat' | 'topics';
 
 export async function LibraryRail({ active }: { active: LibraryCollection }) {
   const [summarizedCount, queuedCount] = await Promise.all([
@@ -32,6 +32,8 @@ export async function LibraryRail({ active }: { active: LibraryCollection }) {
     { id: 'history', label: 'History', icon: '◷', href: '/history' },
     { id: 'summarized', label: 'Summarized', icon: '✦', href: '/summarized', badge: summarizedCount },
     { id: 'summarize-later', label: 'Summarize Later', icon: '🔖', href: '/summarize-later', badge: queuedCount },
+    { id: 'chat', label: 'Chat', icon: '💬', href: '/chat' },
+    { id: 'topics', label: 'Topic Map', icon: '🕸', href: '/topics' },
     { id: 'metrics', label: 'Metrics', icon: '📊', href: '/metrics' },
   ];
 

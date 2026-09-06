@@ -68,6 +68,26 @@ const features = [
     desc: "Ask questions about a video and get answers grounded in the transcript, with timestamp citations.",
   },
   {
+    icon: "🌐",
+    title: "Chat with Your Library",
+    desc: "Stop chatting one video at a time. Ask anything across every indexed video — scoped to a folder, tag, or channel — with sources linking back to each moment.",
+  },
+  {
+    icon: "🕵",
+    title: "Deep Research Agent",
+    desc: "Flip on agent mode and the assistant searches transcripts, summaries, and channel profiles itself — planning multi-step answers like \"which of my channels covered X, and did any disagree?\"",
+  },
+  {
+    icon: "🧠",
+    title: "Channel Memory",
+    desc: "Distill any channel's summaries into a long-term profile — its beat, perspective, and recurring themes — that chat uses as context when you ask about that channel.",
+  },
+  {
+    icon: "🕸",
+    title: "Topic Mind Map",
+    desc: "Every summary feeds a living topic graph. See what your subscriptions collectively talk about, how ideas connect, and jump from a topic straight to its videos.",
+  },
+  {
     icon: "🗂",
     title: "Folders & Tags",
     desc: "Organize channels into folders and tag them for cross-cutting views. Filter music channels automatically.",
@@ -96,8 +116,9 @@ const featureSections = [
   { title: "Never miss what matters", items: [features[6], features[7]] },
   { title: "Understand videos in minutes", items: [features[8], features[9]] },
   { title: "Find anything, ask anything", items: [features[10], features[11]] },
-  { title: "Your library, your system", items: [features[12], features[13]] },
-  { title: "Plug into your workflow", items: [features[14], features[15]] },
+  { title: "A research assistant over your subscriptions", items: [features[12], features[13], features[14], features[15]] },
+  { title: "Your library, your system", items: [features[16], features[17]] },
+  { title: "Plug into your workflow", items: [features[18], features[19]] },
 ];
 
 export function LandingPage() {
