@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { buildMusicQueue, listMusicLibrary } from '@/lib/queue';
 import { getVideo } from '@/lib/video-repo';
 import { computeMusicVideoPresentation } from '@/lib/music-video-pref';
@@ -9,7 +10,7 @@ import type { MusicLibraryGroup, MusicQueueItem } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
-  searchParams: Promise<{ v?: string }>;
+  searchParams: Promise<{ v?: string; queue?: string }>;
 }
 
 /**
@@ -20,8 +21,16 @@ interface PageProps {
  *
  * Now-playing resolution: an explicit `?v=` naming any track from a
  * music-flagged channel plays that track and turns Up Next into the rest of
- * that artist's catalogue ("artist radio"). Without `?v=` (cold load), the
- * top-ranked queue item plays and Up Next shows the ranked queue.
+ * that artist's catalogue ("artist radio"). A `?v=<id>&queue=1` view keeps
+ * the ranked queue as Up Next instead. Cold load (or an unresolvable `?v=`)
+ * never renders unpinned: it redirects to the top-ranked track with
+ * `queue=1`, pinning now-playing in the URL. Without the pin the server
+ * re-resolves now-playing from buildMusicQueue() on every render — and the
+ * play-history write that fires every 30 seconds of playback refreshes this
+ * route while the playing track sits under the queue's 24h played-cooldown,
+ * so each re-render swapped in a new "top" track mid-song (tracks changed
+ * every ~30 seconds). Pinned, the song only changes when it completes
+ * (MusicQueue's onEnded advance) or when the user picks a track.
  *
  * Unlike the /watch route, there is no best-effort YouTube API fetch for
  * videos missing from the local cache — music items are self-contained
@@ -39,11 +48,26 @@ export default async function MusicPage({ searchParams }: PageProps) {
 
   const requestedId = params.v?.trim();
 
+  // `queue=1` marks a queue-driven view (the cold-load redirect below): the
+  // ranked Music queue stays as Up Next instead of switching to artist radio.
+  const queueView = params.queue === '1';
+
   // Resolve an explicit track pick against the full library (every music
   // track, not just the ranked page) — no extra query needed.
   const libraryMatch = requestedId
     ? library.flatMap((g) => g.tracks).find((t) => t.video_id === requestedId) ?? null
     : null;
+
+  // Pin the queue-driven now-playing in the URL (see header comment): cold
+  // load — or a `?v=` that resolves to nothing — redirects to the top-ranked
+  // track so re-renders can't silently swap the playing song. The
+  // `pinId !== requestedId` guard prevents a redirect loop if the top-ranked
+  // track somehow isn't in the library (then the unpinned cold-load branch
+  // below renders, as before).
+  const pinId = !libraryMatch && queue.length > 0 ? queue[0].video_id : null;
+  if (pinId && pinId !== requestedId) {
+    redirect(`/music?v=${encodeURIComponent(pinId)}&queue=1`);
+  }
 
   let nowPlaying: MusicQueueItem | null;
   let orderedQueue: MusicQueueItem[];
@@ -58,19 +82,27 @@ export default async function MusicPage({ searchParams }: PageProps) {
     nowPlaying =
       queue.find((q) => q.video_id === libraryMatch.video_id) ??
       (await hydrateLibraryTrackAsQueueItem(libraryMatch));
-    const artist = library.find((g) => g.channel_title === libraryMatch.channel_title);
-    orderedQueue = (artist?.tracks ?? [])
-      .filter((t) => t.video_id !== libraryMatch.video_id && !t.is_seen)
-      .slice(0, 19)
-      .map((t) => ({
-        ...t,
-        score: 0,
-        is_pinned: false,
-        // Up Next rows never render the player; compute presentation from the
-        // fields the library shape has (title + channel) so the type holds and
-        // the toggle labels stay sensible if one becomes now-playing.
-        ...presentationFromLibraryTrack(t),
-      }));
+    if (queueView) {
+      // Queue-driven view: Up Next is the ranked queue minus the playing
+      // track — what a cold load showed before now-playing was pinned.
+      orderedQueue = queue
+        .filter((q) => q.video_id !== libraryMatch.video_id)
+        .slice(0, 19);
+    } else {
+      const artist = library.find((g) => g.channel_title === libraryMatch.channel_title);
+      orderedQueue = (artist?.tracks ?? [])
+        .filter((t) => t.video_id !== libraryMatch.video_id && !t.is_seen)
+        .slice(0, 19)
+        .map((t) => ({
+          ...t,
+          score: 0,
+          is_pinned: false,
+          // Up Next rows never render the player; compute presentation from the
+          // fields the library shape has (title + channel) so the type holds and
+          // the toggle labels stay sensible if one becomes now-playing.
+          ...presentationFromLibraryTrack(t),
+        }));
+    }
   } else if (queue.length > 0) {
     // Cold load (or an unknown/non-music ?v=): top-ranked track + ranked queue.
     nowPlaying = queue[0];
