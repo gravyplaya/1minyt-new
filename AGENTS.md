@@ -31,6 +31,8 @@ app/            pages (RSC) + _components (client) + actions.ts (all server acti
 lib/db.ts       pg Pool singleton; lib/schema.ts = DDL array; runs on first connect
 lib/repo.ts     channels/folders/tags CRUD
 lib/video-repo.ts  videos, summaries, per-video chat, references, chapters
+lib/video-ingest.ts  ad-hoc video ingest by id (paste-a-URL + /watch fallback)
+lib/youtube-url.ts  pure YouTube URL parser → video id (TAV-67)
 lib/vector-store.ts chunking + embedding + cosine search (per-video and corpus-wide)
 lib/chat.ts     per-video RAG chat (TAV-5)
 lib/library-chat.ts  library-wide chat: scoped retrieval (E/F) + agent loop (H)
@@ -44,7 +46,7 @@ Server actions live in `src/app/actions.ts` — one section per TAV ticket. Page
 
 ## Conventions
 
-- **Tickets:** features carry a `TAV-N` id. Current highest: TAV-66.
+- **Tickets:** features carry a `TAV-N` id. Current highest: TAV-67.
 - **Schema migrations:** append `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements to `SCHEMA_STATEMENTS` — never edit existing table definitions in place, existing DBs won't re-run them.
 - **Embeddings:** local hashing vectorizer (`lib/embeddings.ts`), stored as BYTEA `Float32Array` in `transcript_chunks` with a `chunk_type` of `'transcript'` or `'summary'`. Cosine similarity is computed in JS — fine at hundreds-to-thousands of chunks; revisit if the corpus grows 10x.
 - **LLM calls:** always via `https://openrouter.ai/api/v1/chat/completions`, key `OPENROUTER_API_KEY`, model `SUMMARY_MODEL`/`CHAT_MODEL` env override, default `openrouter/free`. Structured output uses `response_format: { type: 'json_object' }` + fence-tolerant parsing.
@@ -62,6 +64,7 @@ Server actions live in `src/app/actions.ts` — one section per TAV ticket. Page
 | Deep Research agent | TAV-65 (H) | `chatWithLibraryAgent` in `library-chat.ts` | /chat (Deep Research toggle) |
 | Channel memory dossiers | TAV-64 (G) | `dossier.ts`, `summarize.synthesizeChannelDossier` | /chat (scoped to channel) |
 | Topic mind map | TAV-66 (I) | `topics.ts` | /topics, TopicGraphView |
+| Paste a YouTube URL | TAV-67 | `youtube-url.ts`, `video-ingest.ts` | HeaderBar PasteUrlBox → /watch |
 
 ## Notes for future work
 

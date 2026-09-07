@@ -2,12 +2,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 import type { UserProfile } from '@/lib/tokens';
 import { SyncButton } from './SyncButton';
+import { PasteUrlBox } from './PasteUrlBox';
 import { disconnectAction } from '@/app/actions';
 
 /**
  * The top app bar. Navigation lives in the left sidebar (home page);
- * this header keeps the brand, sync/disconnect controls, and the
- * connected-account indicator.
+ * this header keeps the brand, sync/disconnect controls, the
+ * connected-account indicator, and the TAV-67 paste-a-URL box.
  */
 export function HeaderBar({
   connected,
@@ -34,6 +35,7 @@ export function HeaderBar({
         <strong style={{ fontSize: 16, letterSpacing: '-0.01em' }}>1minyt</strong>
         <span className="header-subtitle" style={{ color: '#5a5a64', fontSize: 13, marginLeft: 4 }}>beta</span>
       </Link>
+      {connected && <PasteUrlBox />}
       <div className="header-meta" style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, color: '#8b8b94' }}>
         {connected && (
           <>

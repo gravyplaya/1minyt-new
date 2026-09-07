@@ -19,7 +19,7 @@ import {
 import { syncSubscriptions } from '@/lib/sync';
 import { clearTokens } from '@/lib/tokens';
 import { syncChannelVideos } from '@/lib/video-sync';
-import { getVideo, listRecentUploadIds, listVideosByChannel, saveSummary, setTranscript, setTranscriptStatus, saveChatMessage, listChatMessages, toggleBookmark, saveChapters, upsertVideoComments, setCommentSummary, getCommunityPulse, upsertVideo, persistVideoReferences, getOutgoingReferences, getIncomingReferences, getMostReferencedVideos, toggleVideoLike, recordVideoPlay } from '@/lib/video-repo';
+import { getVideo, getVideoWithSummary, listRecentUploadIds, listVideosByChannel, saveSummary, setTranscript, setTranscriptStatus, saveChatMessage, listChatMessages, toggleBookmark, saveChapters, upsertVideoComments, setCommentSummary, getCommunityPulse, upsertVideo, persistVideoReferences, getOutgoingReferences, getIncomingReferences, getMostReferencedVideos, toggleVideoLike, recordVideoPlay } from '@/lib/video-repo';
 import { fetchTranscript } from '@/lib/transcript';
 import { isWhisperEnabled } from '@/lib/whisper';
 import { summarizeVideo, summarizeComments } from '@/lib/summarize';
@@ -34,7 +34,9 @@ import { saveLibraryChatMessage, listLibraryChatMessages, clearLibraryChat } fro
 import { generateChannelDossier as generateDossier, loadDossier } from '@/lib/dossier';
 import { buildTopicGraph } from '@/lib/topics';
 import { friendlyError } from '@/lib/errors';
-import type { Chapter, ChatCitation, ChatMessage, ChannelCatalogHit, CommunityPulse, IncomingReference, MostReferencedVideo, PlaylistRow, PlaylistSummary, PlaylistVideoRow, SummaryRow, TranscriptSegment, TranscriptSource, VideoWithSummary, TranscriptSearchResult, VideoReferenceWithTarget } from '@/lib/types';
+import type { Chapter, ChatCitation, ChatMessage, ChannelCatalogHit, CommunityPulse, IncomingReference, MostReferencedVideo, PlaylistRow, PlaylistSummary, PlaylistVideoRow, SummaryRow, TranscriptSegment, TranscriptSource, TranscriptStatus, VideoWithSummary, TranscriptSearchResult, VideoReferenceWithTarget } from '@/lib/types';
+import { parseYouTubeUrl } from '@/lib/youtube-url';
+import { ingestVideoById } from '@/lib/video-ingest';
 
 export async function triggerSyncAction() {
   const result = await syncSubscriptions();
@@ -1506,6 +1508,103 @@ export async function getTopicGraphAction(): Promise<import('@/lib/types').Topic
     return await buildTopicGraph();
   } catch {
     return { nodes: [], edges: [], summarizedVideos: 0, generatedAt: Math.floor(Date.now() / 1000) };
+  }
+}
+
+// ----- TAV-67: Paste a YouTube URL -----------------------------------------------
+
+export interface PastedVideoOutcome {
+  ok: boolean;
+  videoId?: string;
+  channelId?: string;
+  /** True when the video already had a summary — the transcript stage was skipped entirely. */
+  alreadySummarized?: boolean;
+  /** Transcript state after this run: 'fetched' = ready to summarize. */
+  transcriptStatus?: TranscriptStatus;
+  /** Non-fatal problem (e.g. no captions available) — the video still loads on /watch. */
+  warning?: string;
+  error?: string;
+}
+
+/**
+ * Process a pasted YouTube video URL (or bare 11-char video id):
+ *  1. Parse the video id — garbage/channel/playlist URLs fail before any API call.
+ *  2. Ingest metadata when the video isn't cached yet (videos.list + channel row).
+ *  3. Fetch the transcript (cached run returns immediately).
+ * The LLM summary is deliberately NOT run here — the user lands on /watch?v=
+ * and clicks "Summarize this video" (added in WatchQueue) so they control the
+ * token spend, mirroring the explicit 1-click flow everywhere else in the app.
+ * Transcript failures are non-fatal: the video still opens (playable), the
+ * summarize button surfaces the "no captions" state.
+ */
+export async function processPastedUrlAction(input: string): Promise<PastedVideoOutcome> {
+  const parsed = parseYouTubeUrl(input);
+  if (parsed.kind !== 'video') {
+    const error =
+      parsed.kind === 'playlist'
+        ? 'Playlist URLs are not supported yet — paste a single video URL.'
+        : parsed.kind === 'channel'
+          ? 'Channel URLs are not supported yet — paste a single video URL.'
+          : 'Could not find a video ID. Paste a YouTube video URL or its 11-character ID.';
+    return { ok: false, error };
+  }
+
+  const videoId = parsed.videoId;
+
+  try {
+    // Fast path: a cached video skips the ingest (and its API quota) entirely.
+    const existing = await getVideo(videoId);
+    if (!existing) {
+      const ingested = await ingestVideoById(videoId);
+      if (!ingested.ok) {
+        const error = ingested.reason === 'not-connected'
+          ? 'Connect your YouTube account first.'
+          : ingested.reason === 'not-found'
+            ? (ingested.error ?? 'Video not found.')
+            : friendlyError(new Error(ingested.error ?? 'Failed to fetch the video.'));
+        return { ok: false, videoId, error };
+      }
+    }
+
+    const video = await getVideoWithSummary(videoId);
+    if (!video) {
+      return { ok: false, videoId, error: 'Video not found. Refresh videos first.' };
+    }
+
+    revalidatePath(`/c/${video.channel_id}`);
+
+    // Already summarized — don't spend tokens re-running the pipeline.
+    if (video.summary) {
+      return {
+        ok: true,
+        videoId,
+        channelId: video.channel_id,
+        alreadySummarized: true,
+        transcriptStatus: video.transcript_status,
+      };
+    }
+
+    // Transcript stage: fetches (or returns cached). Non-fatal on failure —
+    // /watch still works, the summarize button shows the unavailable state.
+    const t = await fetchTranscriptAction(videoId);
+    if (!t.ok) {
+      return {
+        ok: true,
+        videoId,
+        channelId: video.channel_id,
+        transcriptStatus: 'unavailable',
+        warning: t.error ?? 'No transcript available for this video.',
+      };
+    }
+
+    return {
+      ok: true,
+      videoId,
+      channelId: video.channel_id,
+      transcriptStatus: 'fetched',
+    };
+  } catch (err) {
+    return { ok: false, videoId, error: friendlyError(err) };
   }
 }
 

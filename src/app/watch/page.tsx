@@ -1,9 +1,8 @@
 import { notFound } from 'next/navigation';
 import { buildWatchQueue } from '@/lib/queue';
-import { ensureChannelRow, getVideoWithSummary, upsertVideo } from '@/lib/video-repo';
-import { fetchVideoDetails } from '@/lib/youtube';
-import { isConnected, getUserProfile, getValidAccessToken } from '@/lib/tokens';
-import { parseIso8601Duration } from '@/app/_lib/format';
+import { getVideoWithSummary } from '@/lib/video-repo';
+import { ingestVideoById } from '@/lib/video-ingest';
+import { isConnected, getUserProfile } from '@/lib/tokens';
 import { AppShell } from '../_components/AppShell';
 import { WatchQueue } from '../_components/WatchQueue';
 import type { WatchQueueItem } from '@/lib/types';
@@ -22,10 +21,11 @@ interface PageProps {
  * WatchQueue component. The "now playing" video is the top-ranked queue item
  * unless the `?v=` query param selects a specific one.
  *
- * When `?v=` names a video not in the local cache, we best-effort fetch it via
- * the YouTube Data API and upsert it so the watch page can surface it without
- * requiring a channel sync first. The fetch is non-fatal — if it fails, we
- * fall back to the first queue item.
+ * When `?v=` names a video not in the local cache, we best-effort ingest it via
+ * lib/video-ingest (YouTube Data API, shared with the paste-a-URL flow,
+ * TAV-67) so the watch page can surface it without requiring a channel sync
+ * first. The ingest is non-fatal — if it fails, we fall back to the first
+ * queue item, or an empty-state message when there is no queue either.
  */
 export default async function WatchPage({ searchParams }: PageProps) {
   const params = await searchParams;
@@ -35,28 +35,31 @@ export default async function WatchPage({ searchParams }: PageProps) {
     buildWatchQueue(20),
   ]);
 
-  if (queue.length === 0) {
-    return (
-      <AppShell tab="watch" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-        <EmptyWatchState connected={connected} />
-      </AppShell>
-    );
-  }
-
   // Determine the "now playing" video: prefer ?v= if it's in the queue, else
   // the top-ranked item. If ?v= is set but missing from the local cache, try
-  // to fetch it from the YouTube API (best-effort), then fall back to the first
-  // queue item on any failure.
+  // to ingest it from the YouTube API (best-effort, shared with the paste-a-
+  // URL flow — TAV-56/TAV-67), then fall back to the first queue item on any
+  // failure. Unlike the original TAV-56 flow, an ad-hoc video now plays even
+  // when the queue is empty — pasting a URL must always land somewhere.
   const requestedId = params.v?.trim();
-  let nowPlayingId = queue[0].video_id;
+  let nowPlayingId = queue[0]?.video_id ?? null;
 
   if (requestedId && requestedId !== nowPlayingId) {
     const inQueue = queue.some((q) => q.video_id === requestedId);
     if (inQueue) {
       nowPlayingId = requestedId;
     } else {
-      nowPlayingId = await bestEffortFetchVideo(requestedId) ?? queue[0].video_id;
+      const ingested = await ingestVideoById(requestedId);
+      if (ingested.ok) nowPlayingId = requestedId;
     }
+  }
+
+  if (!nowPlayingId) {
+    return (
+      <AppShell tab="watch" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+        <EmptyWatchState connected={connected} failedRequested={Boolean(requestedId)} />
+      </AppShell>
+    );
   }
 
   const nowPlaying = await getVideoWithSummary(nowPlayingId);
@@ -77,81 +80,18 @@ export default async function WatchPage({ searchParams }: PageProps) {
   );
 }
 
-/**
- * Best-effort: fetch a single video's metadata from the YouTube Data API and
- * upsert it into the local cache so getVideoWithSummary can hydrate it. Returns
- * the video id on success, or null on any failure (no token, API error, private
- * video). Non-fatal — the caller falls back to the first queue item.
- */
-async function bestEffortFetchVideo(videoId: string): Promise<string | null> {
-  try {
-    const accessToken = await getValidAccessToken();
-    const details = await fetchVideoDetails(accessToken, [videoId]);
-    const det = details[0];
-    const snip = det?.snippet;
-    if (!det || !snip) return null;
-
-    // Ensure a minimal channels row exists before inserting the video, so the
-    // videos.channel_id FK constraint is satisfied. Mirrors recordLikedVideos.
-    const channelId = snip.channelId ?? null;
-    await ensureChannelRow(channelId, snip.channelTitle ?? null);
-
-    await upsertVideo({
-      video_id: videoId,
-      channel_id: channelId ?? 'unknown',
-      title: snip.title ?? '(untitled)',
-      description: snip.description ?? null,
-      thumbnail_url:
-        snip.thumbnails?.medium?.url ??
-        snip.thumbnails?.high?.url ??
-        snip.thumbnails?.default?.url ??
-        null,
-      duration_seconds: parseIso8601Duration(det.contentDetails?.duration ?? null),
-      published_at: parseIsoDate(snip.publishedAt),
-      view_count: numeric(det.statistics?.viewCount),
-      like_count: numeric(det.statistics?.likeCount),
-      comment_count: numeric(det.statistics?.commentCount),
-      favorite_count: numeric(det.statistics?.favoriteCount),
-      tags: tagsToJson(det.snippet?.tags ?? null),
-      category_id: numeric(det.snippet?.categoryId),
-      is_live: det.liveStreamingDetails || snip.liveBroadcastContent === 'live' ? 1 : 0,
-      live_streaming_details: det.liveStreamingDetails
-        ? JSON.stringify(det.liveStreamingDetails)
-        : null,
-    });
-    return videoId;
-  } catch {
-    return null;
-  }
-}
-
-function parseIsoDate(iso: string | null | undefined): number | null {
-  if (!iso) return null;
-  const ms = Date.parse(iso);
-  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
-}
-
-function numeric(v: string | null | undefined): number | null {
-  if (v == null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function tagsToJson(tags: string[] | null | undefined): string | null {
-  if (!tags || tags.length === 0) return null;
-  return JSON.stringify(tags);
-}
-
-function EmptyWatchState({ connected }: { connected: boolean }) {
+function EmptyWatchState({ connected, failedRequested }: { connected: boolean; failedRequested: boolean }) {
   return (
     <div style={{ maxWidth: 540, margin: '60px auto', textAlign: 'center' }}>
       <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8 }}>
-        Nothing to watch yet
+        {failedRequested ? 'Could not load that video' : 'Nothing to watch yet'}
       </h2>
       <p style={{ color: '#8b8b94', fontSize: 14, lineHeight: 1.5 }}>
-        {connected
-          ? 'Your Watch queue is empty. Summarize a few videos or sync your subscriptions to build a recommendation queue — the watch tab blends what you haven\u2019t seen, what matches your topics, and what your saved videos cite.'
-          : 'Connect your YouTube account to build a personalised Watch queue from your subscriptions.'}
+        {failedRequested
+          ? 'The video could not be fetched — it may be private, deleted, or the ID is wrong. Double-check the URL and try pasting it again.'
+          : connected
+            ? 'Your Watch queue is empty. Summarize a few videos or sync your subscriptions to build a recommendation queue — the watch tab blends what you haven\u2019t seen, what matches your topics, and what your saved videos cite.'
+            : 'Connect your YouTube account to build a personalised Watch queue from your subscriptions.'}
       </p>
     </div>
   );
