@@ -27,6 +27,8 @@ import { VideoChatPanel } from './VideoChatPanel';
 import { VideoReferencesSection } from './VideoReferencesSection';
 import {
   getSegmentsAction,
+  fetchTranscriptAction,
+  summarizeVideoAction,
   skipQueueItemAction,
   unpinQueueItemAction,
   pinToQueueTopAction,
@@ -37,6 +39,9 @@ import { formatRelative, formatDuration, youtubeVideoUrl } from '../_lib/format'
 
 /** Number of top queue items to shuffle when the user clicks Shuffle. */
 const SHUFFLE_TOP_N = 5;
+
+/** TAV-67: summarize stage for the now-playing video — mirrors VideoSummaryRow's two-stage flow. */
+type SummarizeStage = 'idle' | 'transcribing' | 'summarizing' | 'error';
 
 export interface WatchQueueProps {
   /** Ranked candidate videos from buildWatchQueue(20), excluding now-playing. */
@@ -65,6 +70,25 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
   }, [queue]);
 
   const [, startTransition] = useTransition();
+
+  // TAV-67: inline summarize for the now-playing video (paste-a-URL landing).
+  // Two stages, mirroring VideoSummaryRow. Clicking an Up Next row re-renders
+  // this component with a new nowPlaying prop (no remount), so the stage and
+  // error reset when the now-playing video changes.
+  const [summarizeStage, setSummarizeStage] = useState<SummarizeStage>('idle');
+  const [summarizeError, setSummarizeError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // Deferred to a microtask so React doesn't warn about cascading renders —
+    // matching the localQueue-sync effect above.
+    Promise.resolve().then(() => {
+      if (!cancelled) {
+        setSummarizeStage('idle');
+        setSummarizeError(null);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [videoId]);
 
   // Fetch transcript segments for the "now playing" highlight when the video
   // changes. Best-effort — empty segments just hides the highlight. The
@@ -198,6 +222,33 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
 
   const hasSummary = Boolean(nowPlaying.summary);
 
+  // TAV-67: summarize the now-playing video. Stage 1 fetches (or returns the
+  // cached) transcript — for pasted URLs the paste flow already fetched it,
+  // so this returns instantly; for queue videos it fetches on demand. Stage 2
+  // runs the LLM pipeline; router.refresh() re-renders the server component so
+  // the persisted summary replaces this card.
+  const summarizeNowPlaying = () => {
+    setSummarizeError(null);
+    setSummarizeStage('transcribing');
+    startTransition(async () => {
+      const t = await fetchTranscriptAction(videoId);
+      if (!t.ok) {
+        setSummarizeError(t.error ?? 'Failed to fetch transcript.');
+        setSummarizeStage('error');
+        return;
+      }
+      setSummarizeStage('summarizing');
+      const s = await summarizeVideoAction(videoId);
+      if (s.ok) {
+        setSummarizeStage('idle');
+        router.refresh();
+      } else {
+        setSummarizeError(s.error ?? 'Failed to summarize.');
+        setSummarizeStage('error');
+      }
+    });
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Full-width 16:9 player */}
@@ -277,6 +328,48 @@ export function WatchQueue({ queue, nowPlaying }: WatchQueueProps) {
                 communityPulse={nowPlaying.community_pulse}
                 onSeek={handleSeek}
               />
+            </div>
+          )}
+
+          {/* TAV-67: summarize card for videos without a summary yet — the
+              landing surface for pasted URLs. Mirrors VideoSummaryRow's
+              two-stage flow; refreshes into the summary block above. */}
+          {!hasSummary && (
+            <div
+              style={{
+                border: '1px solid #2a2a33',
+                borderRadius: 12,
+                background: '#15151a',
+                padding: '12px 16px',
+                marginBottom: 16,
+                fontSize: 13,
+                color: '#8b8b94',
+              }}
+            >
+              {nowPlaying.transcript_status === 'unavailable' ? (
+                <span>No captions available for this video — it can&rsquo;t be summarized.</span>
+              ) : summarizeStage === 'transcribing' ? (
+                <span>Fetching transcript…</span>
+              ) : summarizeStage === 'summarizing' ? (
+                <span>Summarizing — this can take a minute…</span>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={summarizeNowPlaying}
+                    style={{ fontSize: 12, padding: '6px 12px' }}
+                  >
+                    ✨ Summarize this video
+                  </button>
+                  <span>Generate a summary with chapters and community pulse.</span>
+                </div>
+              )}
+              {summarizeError && (
+                <div role="alert" style={{ color: '#ff9b6b', marginTop: 8, fontSize: 12 }}>
+                  {summarizeError}
+                </div>
+              )}
             </div>
           )}
 
