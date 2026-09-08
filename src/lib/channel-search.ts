@@ -26,6 +26,7 @@
 
 import type { ChannelSearchResult } from './youtube';
 import { YTNodes } from 'youtubei.js';
+import { getInnertube } from './innertube';
 
 export type ChannelSearchProvider = 'innertube' | 'data-api';
 
@@ -70,32 +71,6 @@ export async function searchChannelCatalog(
 }
 
 // ----- Innertube (youtubei.js) implementation ---------------------------------
-
-/**
- * Module-level singleton. `Innertube.create()` fetches client config from
- * YouTube on first use (session tokens, client version). Creating one per
- * request would multiply that handshake; one per process is what the library
- * authors recommend for server use.
- */
-let innertubePromise: Promise<InnertubeClient> | null = null;
-
-type InnertubeClient = Awaited<ReturnType<typeof createInnertube>>;
-
-async function createInnertube() {
-  const { Innertube } = await import('youtubei.js');
-  return Innertube.create();
-}
-
-function getInnertube(): Promise<InnertubeClient> {
-  if (!innertubePromise) {
-    innertubePromise = createInnertube().catch((err) => {
-      // Don't cache a failed init — let the next call retry.
-      innertubePromise = null;
-      throw err;
-    });
-  }
-  return innertubePromise;
-}
 
 /**
  * Relative-date strings ("2 years ago") from search cards are coarse. When

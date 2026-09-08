@@ -1555,13 +1555,13 @@ export async function processPastedUrlAction(input: string): Promise<PastedVideo
     // Fast path: a cached video skips the ingest (and its API quota) entirely.
     const existing = await getVideo(videoId);
     if (!existing) {
+      // Ingest works with or without a connected account — anonymous pastes
+      // go through the Innertube path (TAV-67), connected ones via the Data API.
       const ingested = await ingestVideoById(videoId);
       if (!ingested.ok) {
-        const error = ingested.reason === 'not-connected'
-          ? 'Connect your YouTube account first.'
-          : ingested.reason === 'not-found'
-            ? (ingested.error ?? 'Video not found.')
-            : friendlyError(new Error(ingested.error ?? 'Failed to fetch the video.'));
+        const error = ingested.reason === 'not-found'
+          ? (ingested.error ?? 'Video not found.')
+          : friendlyError(new Error(ingested.error ?? 'Failed to fetch the video.'));
         return { ok: false, videoId, error };
       }
     }
