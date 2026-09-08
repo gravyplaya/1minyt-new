@@ -11,8 +11,8 @@
  *     real metadata (duration, stats, tags), unlike the catalog-hit path
  *     which stores nulls.
  *  2. Innertube (anonymous users): youtubei.js `getBasicInfo` — no OAuth, no
- *     quota, no API key. Covers most public videos; a LOGIN_REQUIRED /
- *     playability error degrades to "not found".
+ *     quota, no API key. Covers most public videos; a client that gets
+ *     bot-walled is retried on other clients before giving up.
  *     Also used as a fallback when the Data API call itself fails (quota
  *     blips, network) so a connected user's paste still succeeds.
  *
@@ -147,73 +147,119 @@ async function ingestVideoViaDataApi(videoId: string, accessToken: string): Prom
  * null. The channel row is the minimal ensureChannelRow stub — good enough
  * for the FK and the channel page; a later subscription sync or connected
  * paste can enrich it.
+ *
+ * Client-retry chain (ANDROID → IOS → WEB): YouTube's bot check is
+ * intermittent and client-specific — a request that parses to a shell with
+ * no videoDetails (LOGIN_REQUIRED / UNPLAYABLE with empty basic_info) on one
+ * client often succeeds on another. ANDROID leads for the same reason
+ * transcript.ts uses it: it's the most bot-wall-resistant client. Only a
+ * thrown "unavailable" (playability ERROR — deleted/private/wrong id) is
+ * treated as definitively not found; anything else retries on the next
+ * client before giving up with a bot-check error rather than a false
+ * "not found".
  */
+const INNERTUBE_INGEST_CLIENTS = ['ANDROID', 'IOS', 'WEB'] as const;
+
 async function ingestVideoViaInnertube(videoId: string): Promise<IngestVideoResult> {
-  let info;
-  try {
-    const yt = await getInnertube();
-    info = await yt.getBasicInfo(videoId);
-  } catch (err) {
-    // Parser errors on malformed/deleted ids, network failures, YouTube
-    // bot-checks — all surface as a fetch failure to the user.
-    return {
-      ok: false,
-      videoId,
-      channelId: null,
-      reason: 'api',
-      error: err instanceof Error ? err.message : String(err),
-    };
+  let lastFailure = 'no attempts';
+
+  for (const client of INNERTUBE_INGEST_CLIENTS) {
+    let info;
+    try {
+      const yt = await getInnertube();
+      info = await yt.getBasicInfo(videoId, { client });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // youtubei.js throws 'This video is unavailable' (InnertubeError) when
+      // playability is ERROR — deleted, private, or a wrong id. Definitive
+      // for every client; don't burn the retry chain on it.
+      if (/unavailable/i.test(msg)) {
+        return {
+          ok: false,
+          videoId,
+          channelId: null,
+          reason: 'not-found',
+          error: 'Video not found — it may be private, deleted, or the ID is wrong.',
+        };
+      }
+      // Network blip / parser hiccup — the next client may still get through.
+      lastFailure = `${client}: ${msg}`;
+      continue;
+    }
+
+    const b = info.basic_info;
+
+    if (b.is_private) {
+      return {
+        ok: false,
+        videoId,
+        channelId: null,
+        reason: 'not-found',
+        error: 'Video not found — it may be private, deleted, or the ID is wrong.',
+      };
+    }
+
+    // Usable = videoDetails actually populated. A bot-walled response parses
+    // to a shell with no title (verified: TV/WEB under bot check) — retry the
+    // next client instead of reporting "not found" for a video that exists.
+    if (b.id && b.title) {
+      const channelId = b.channel_id ?? b.channel?.id ?? null;
+      const channelName = b.channel?.name ?? b.author ?? channelId;
+
+      try {
+        await ensureChannelRow(channelId, channelName ?? null);
+
+        await upsertVideo({
+          video_id: videoId,
+          channel_id: channelId ?? 'unknown',
+          title: b.title,
+          description: b.short_description ?? null,
+          thumbnail_url: pickInnertubeThumb(b.thumbnail),
+          duration_seconds: finiteOrNull(b.duration),
+          published_at: null,
+          view_count: finiteOrNull(b.view_count),
+          like_count: finiteOrNull(b.like_count),
+          comment_count: null,
+          favorite_count: null,
+          tags: tagsToJson(b.tags ?? b.keywords ?? null),
+          // basic_info.category is a display string ("Gaming"), not the numeric
+          // category id the column expects — leave null rather than store garbage.
+          category_id: null,
+          is_live: b.is_live || b.is_live_content ? 1 : 0,
+          live_streaming_details: null,
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          videoId,
+          channelId,
+          reason: 'api',
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+
+      return { ok: true, videoId, channelId };
+    }
+
+    // Shell response (LOGIN_REQUIRED / UNPLAYABLE / empty videoDetails) for
+    // THIS client — most likely the bot wall. Try the next client.
+    lastFailure = `${client}: playability ${info.playability_status?.status ?? 'unknown'}, no video details`;
   }
 
-  const b = info.basic_info;
-  const playability = info.playability_status?.status;
-  // Unplayable/private videos return a shell basic_info — treat as not-found.
-  if (!b.id || !b.title || playability === 'ERROR' || b.is_private) {
-    return {
-      ok: false,
-      videoId,
-      channelId: null,
-      reason: 'not-found',
-      error: 'Video not found — it may be private, deleted, or the ID is wrong.',
-    };
-  }
+  console.warn(`ingestVideoViaInnertube: all clients failed for ${videoId} (${lastFailure})`);
+  return {
+    ok: false,
+    videoId,
+    channelId: null,
+    reason: 'api',
+    error:
+      'YouTube blocked the anonymous request (bot check). Try again in a moment — or connect your YouTube account, which uses the official API.',
+  };
+}
 
-  const channelId = b.channel_id ?? b.channel?.id ?? null;
-  const channelName = b.channel?.name ?? b.author ?? channelId;
-
-  try {
-    await ensureChannelRow(channelId, channelName ?? null);
-
-    await upsertVideo({
-      video_id: videoId,
-      channel_id: channelId ?? 'unknown',
-      title: b.title,
-      description: b.short_description ?? null,
-      thumbnail_url: pickInnertubeThumb(b.thumbnail),
-      duration_seconds: b.duration ?? null,
-      published_at: null,
-      view_count: b.view_count ?? null,
-      like_count: b.like_count ?? null,
-      comment_count: null,
-      favorite_count: null,
-      tags: tagsToJson(b.tags ?? b.keywords ?? null),
-      // basic_info.category is a display string ("Gaming"), not the numeric
-      // category id the column expects — leave null rather than store garbage.
-      category_id: null,
-      is_live: b.is_live || b.is_live_content ? 1 : 0,
-      live_streaming_details: null,
-    });
-  } catch (err) {
-    return {
-      ok: false,
-      videoId,
-      channelId,
-      reason: 'api',
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-
-  return { ok: true, videoId, channelId };
+/** youtubei.js shells can carry NaN counts — keep them out of the DB. */
+function finiteOrNull(n: number | undefined | null): number | null {
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
 }
 
 /** youtubei.js thumbnails are ordered small → large; prefer the last. */
