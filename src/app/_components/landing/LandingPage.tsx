@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef } from "react";
+import { PasteUrlBox } from "../PasteUrlBox";
 import "./landing.css";
 
 const Scene3D = dynamic(() => import("./Scene3D"), { ssr: false });
@@ -197,6 +198,21 @@ export function LandingPage() {
             builds an Intelligent Queue that ranks what to play next using your
             own attention data — not YouTube&apos;s global average.
           </p>
+          {/* TAV-67: paste-to-try — the primary action, no sign-in needed.
+              Anonymous pastes run entirely through Innertube + OpenRouter:
+              metadata, transcript, summary, chat. */}
+          <div className="landing-paste">
+            <PasteUrlBox variant="hero" />
+            <p className="landing-paste-note">
+              Instant — no YouTube sign-in. Paste any video URL to get its
+              transcript, a 1-click AI summary, chapters, and chat.
+            </p>
+          </div>
+
+          <div className="landing-cta-divider">
+            or connect your whole library
+          </div>
+
           <div className="landing-cta-row">
             <a
               className="btn btn-primary landing-btn-lg landing-btn-shine"
@@ -212,7 +228,8 @@ export function LandingPage() {
             </a>
           </div>
           <p className="landing-fine-print">
-            Free • Your data stays in your account • Disconnect anytime
+            Free • No sign-in to try • Your data stays in your account •
+            Disconnect anytime
           </p>
         </div>
       </section>

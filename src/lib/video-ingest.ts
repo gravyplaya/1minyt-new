@@ -5,17 +5,23 @@
  * paste-a-URL flow (TAV-67) and the /watch?v= ad-hoc fallback share one
  * implementation instead of duplicating the pipeline.
  *
- * Flow:
- *  1. `videos.list` by id (1 quota unit) — full snippet + contentDetails +
- *     statistics, so the row is born with real metadata (duration, stats, tags),
- *     unlike the catalog-hit path which stores nulls.
- *  2. Ensure the channels row exists. When the channel is new to the library,
- *     fetch its full details (1 more quota unit) and insert a proper row —
- *     thumbnail, handle, stats, music classification — so the channel page
- *     doesn't open on a bare stub. Falls back to the minimal ensureChannelRow
- *     stub when that fetch fails; the videos.channel_id FK just needs a row.
- *  3. Upsert the video row. Idempotent — re-ingesting refreshes metadata and
- *     preserves transcript/summary state via upsertVideo's COALESCE rules.
+ * Two data sources:
+ *  1. Official Data API (connected users): `videos.list` by id (1 quota unit)
+ *     — full snippet + contentDetails + statistics, so the row is born with
+ *     real metadata (duration, stats, tags), unlike the catalog-hit path
+ *     which stores nulls.
+ *  2. Innertube (anonymous users): youtubei.js `getBasicInfo` — no OAuth, no
+ *     quota, no API key. Covers most public videos; a LOGIN_REQUIRED /
+ *     playability error degrades to "not found".
+ *     Also used as a fallback when the Data API call itself fails (quota
+ *     blips, network) so a connected user's paste still succeeds.
+ *
+ * Either way we then ensure the channels row exists — for a channel new to
+ * the library we insert a full ChannelRow when we have an access token
+ * (thumbnail, handle, stats, music classification), otherwise the minimal
+ * ensureChannelRow stub (the videos.channel_id FK just needs a row) — and
+ * upsert the video. Idempotent — re-ingesting refreshes metadata and
+ * preserves transcript/summary state via upsertVideo's COALESCE rules.
  */
 
 import type { youtube_v3 } from 'googleapis';
@@ -24,10 +30,11 @@ import { ensureChannelRow, upsertVideo } from './video-repo';
 import { getChannel, upsertChannel } from './repo';
 import { classifyMusic } from './music-classifier';
 import { getValidAccessToken } from './tokens';
+import { getInnertube } from './innertube';
 import type { ChannelRow } from './types';
 
 /** Why an ingest failed — mapped to a friendly message by the action layer. */
-export type IngestVideoReason = 'not-found' | 'not-connected' | 'api';
+export type IngestVideoReason = 'not-found' | 'api';
 
 export interface IngestVideoResult {
   ok: boolean;
@@ -39,13 +46,35 @@ export interface IngestVideoResult {
 }
 
 export async function ingestVideoById(videoId: string): Promise<IngestVideoResult> {
-  let accessToken: string;
+  // Connected users go through the official Data API; anonymous pasteers
+  // (TAV-67: no sign-in) go straight to Innertube. A missing/invalid token
+  // is not an error — it just picks the path.
+  let accessToken: string | null = null;
   try {
     accessToken = await getValidAccessToken();
   } catch {
-    return { ok: false, videoId, channelId: null, reason: 'not-connected', error: 'YouTube account is not connected.' };
+    accessToken = null;
   }
 
+  if (!accessToken) {
+    return ingestVideoViaInnertube(videoId);
+  }
+
+  const result = await ingestVideoViaDataApi(videoId, accessToken);
+  // Quota blip / network error on the Data API path — the paste should still
+  // succeed if Innertube can see the video. (Not-found is final: the video
+  // really isn't resolvable via an authorized account either.)
+  if (!result.ok && result.reason === 'api') {
+    console.warn(
+      `ingestVideoById: Data API failed for ${videoId} (${result.error}), falling back to Innertube.`,
+    );
+    return ingestVideoViaInnertube(videoId);
+  }
+  return result;
+}
+
+/** Official Data API path: `videos.list` by id with full metadata. */
+async function ingestVideoViaDataApi(videoId: string, accessToken: string): Promise<IngestVideoResult> {
   let details: youtube_v3.Schema$Video[];
   try {
     details = await fetchVideoDetails(accessToken, [videoId]);
@@ -109,6 +138,88 @@ export async function ingestVideoById(videoId: string): Promise<IngestVideoResul
   }
 
   return { ok: true, videoId, channelId };
+}
+
+/**
+ * Anonymous Innertube path (TAV-67): youtubei.js `getBasicInfo` — no OAuth, no
+ * quota, no API key. Metadata is slightly thinner than the Data API path
+ * (no publish date / comment count), which the columns happily accept as
+ * null. The channel row is the minimal ensureChannelRow stub — good enough
+ * for the FK and the channel page; a later subscription sync or connected
+ * paste can enrich it.
+ */
+async function ingestVideoViaInnertube(videoId: string): Promise<IngestVideoResult> {
+  let info;
+  try {
+    const yt = await getInnertube();
+    info = await yt.getBasicInfo(videoId);
+  } catch (err) {
+    // Parser errors on malformed/deleted ids, network failures, YouTube
+    // bot-checks — all surface as a fetch failure to the user.
+    return {
+      ok: false,
+      videoId,
+      channelId: null,
+      reason: 'api',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  const b = info.basic_info;
+  const playability = info.playability_status?.status;
+  // Unplayable/private videos return a shell basic_info — treat as not-found.
+  if (!b.id || !b.title || playability === 'ERROR' || b.is_private) {
+    return {
+      ok: false,
+      videoId,
+      channelId: null,
+      reason: 'not-found',
+      error: 'Video not found — it may be private, deleted, or the ID is wrong.',
+    };
+  }
+
+  const channelId = b.channel_id ?? b.channel?.id ?? null;
+  const channelName = b.channel?.name ?? b.author ?? channelId;
+
+  try {
+    await ensureChannelRow(channelId, channelName ?? null);
+
+    await upsertVideo({
+      video_id: videoId,
+      channel_id: channelId ?? 'unknown',
+      title: b.title,
+      description: b.short_description ?? null,
+      thumbnail_url: pickInnertubeThumb(b.thumbnail),
+      duration_seconds: b.duration ?? null,
+      published_at: null,
+      view_count: b.view_count ?? null,
+      like_count: b.like_count ?? null,
+      comment_count: null,
+      favorite_count: null,
+      tags: tagsToJson(b.tags ?? b.keywords ?? null),
+      // basic_info.category is a display string ("Gaming"), not the numeric
+      // category id the column expects — leave null rather than store garbage.
+      category_id: null,
+      is_live: b.is_live || b.is_live_content ? 1 : 0,
+      live_streaming_details: null,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      videoId,
+      channelId,
+      reason: 'api',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  return { ok: true, videoId, channelId };
+}
+
+/** youtubei.js thumbnails are ordered small → large; prefer the last. */
+function pickInnertubeThumb(thumbs: Array<{ url?: string }> | undefined | null): string | null {
+  if (!thumbs || thumbs.length === 0) return null;
+  return thumbs[thumbs.length - 1]?.url ?? null;
 }
 
 /**

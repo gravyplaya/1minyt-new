@@ -31,8 +31,9 @@ app/            pages (RSC) + _components (client) + actions.ts (all server acti
 lib/db.ts       pg Pool singleton; lib/schema.ts = DDL array; runs on first connect
 lib/repo.ts     channels/folders/tags CRUD
 lib/video-repo.ts  videos, summaries, per-video chat, references, chapters
-lib/video-ingest.ts  ad-hoc video ingest by id (paste-a-URL + /watch fallback)
+lib/video-ingest.ts  ad-hoc video ingest by id (paste-a-URL + /watch fallback; Data API when connected, Innertube when anonymous)
 lib/youtube-url.ts  pure YouTube URL parser → video id (TAV-67)
+lib/innertube.ts  shared youtubei.js client singleton (no OAuth, no quota)
 lib/vector-store.ts chunking + embedding + cosine search (per-video and corpus-wide)
 lib/chat.ts     per-video RAG chat (TAV-5)
 lib/library-chat.ts  library-wide chat: scoped retrieval (E/F) + agent loop (H)
@@ -64,7 +65,7 @@ Server actions live in `src/app/actions.ts` — one section per TAV ticket. Page
 | Deep Research agent | TAV-65 (H) | `chatWithLibraryAgent` in `library-chat.ts` | /chat (Deep Research toggle) |
 | Channel memory dossiers | TAV-64 (G) | `dossier.ts`, `summarize.synthesizeChannelDossier` | /chat (scoped to channel) |
 | Topic mind map | TAV-66 (I) | `topics.ts` | /topics, TopicGraphView |
-| Paste a YouTube URL | TAV-67 | `youtube-url.ts`, `video-ingest.ts` | HeaderBar PasteUrlBox → /watch |
+| Paste a YouTube URL | TAV-67 | `youtube-url.ts`, `video-ingest.ts` (Innertube path = no sign-in) | HeaderBar PasteUrlBox, landing hero, /watch |
 
 ## Notes for future work
 
