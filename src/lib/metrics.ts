@@ -82,7 +82,7 @@ export interface MetricsResult {
 
 // ----- queries ---------------------------------------------------------------
 
-export async function topChannelsByInteraction(limit = 10): Promise<ChannelInteraction[]> {
+export async function topChannelsByInteraction(userId: string, limit = 10): Promise<ChannelInteraction[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<ChannelInteraction>(
@@ -98,20 +98,22 @@ export async function topChannelsByInteraction(limit = 10): Promise<ChannelInter
       LEFT JOIN (
         SELECT v.channel_id, COUNT(*) AS cnt
         FROM summaries sm
-        JOIN videos v ON v.video_id = sm.video_id
+        JOIN videos v ON v.user_id = sm.user_id AND v.video_id = sm.video_id
+        WHERE sm.user_id = $1
         GROUP BY v.channel_id
       ) s ON s.channel_id = c.channel_id
       LEFT JOIN (
         SELECT v.channel_id, COUNT(*) AS cnt
         FROM chat_messages cm
-        JOIN videos v ON v.video_id = cm.video_id
-        WHERE cm.role = 'user'
+        JOIN videos v ON v.user_id = cm.user_id AND v.video_id = cm.video_id
+        WHERE cm.user_id = $1 AND cm.role = 'user'
         GROUP BY v.channel_id
       ) ch ON ch.channel_id = c.channel_id
-      WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
+      WHERE c.user_id = $1
+        AND (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
       ORDER BY total DESC, summaries DESC, c.title ASC
-      LIMIT $1`,
-      [limit],
+      LIMIT $2`,
+      [userId, limit],
     );
     return rows;
   } finally {
@@ -119,7 +121,7 @@ export async function topChannelsByInteraction(limit = 10): Promise<ChannelInter
   }
 }
 
-export async function topVideosByInteraction(limit = 10): Promise<VideoInteraction[]> {
+export async function topVideosByInteraction(userId: string, limit = 10): Promise<VideoInteraction[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query(
@@ -134,22 +136,24 @@ export async function topVideosByInteraction(limit = 10): Promise<VideoInteracti
         (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) AS total,
         COALESCE(s.last_ts, ch.last_ts) AS last_interaction
       FROM videos v
-      JOIN channels c ON c.channel_id = v.channel_id
+      JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
       LEFT JOIN (
         SELECT video_id, COUNT(*) AS cnt, MAX(created_at) AS last_ts
         FROM summaries
+        WHERE user_id = $1
         GROUP BY video_id
       ) s ON s.video_id = v.video_id
       LEFT JOIN (
         SELECT video_id, COUNT(*) AS cnt, MAX(created_at) AS last_ts
         FROM chat_messages
-        WHERE role = 'user'
+        WHERE user_id = $1 AND role = 'user'
         GROUP BY video_id
       ) ch ON ch.video_id = v.video_id
-      WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
+      WHERE v.user_id = $1
+        AND (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0
       ORDER BY total DESC, summaries DESC, v.title ASC
-      LIMIT $1`,
-      [limit],
+      LIMIT $2`,
+      [userId, limit],
     );
     return rows.map((r: any) => ({
       ...r,
@@ -160,7 +164,7 @@ export async function topVideosByInteraction(limit = 10): Promise<VideoInteracti
   }
 }
 
-export async function topTopicsByInteraction(limit = 10): Promise<TopicCount[]> {
+export async function topTopicsByInteraction(userId: string, limit = 10): Promise<TopicCount[]> {
   const client = await getDb();
   try {
     // Per-channel interaction totals
@@ -170,16 +174,19 @@ export async function topTopicsByInteraction(limit = 10): Promise<TopicCount[]> 
       FROM channels c
       LEFT JOIN (
         SELECT v.channel_id, COUNT(*) AS cnt
-        FROM summaries sm JOIN videos v ON v.video_id = sm.video_id
+        FROM summaries sm JOIN videos v ON v.user_id = sm.user_id AND v.video_id = sm.video_id
+        WHERE sm.user_id = $1
         GROUP BY v.channel_id
       ) s ON s.channel_id = c.channel_id
       LEFT JOIN (
         SELECT v.channel_id, COUNT(*) AS cnt
-        FROM chat_messages cm JOIN videos v ON v.video_id = cm.video_id
-        WHERE cm.role = 'user'
+        FROM chat_messages cm JOIN videos v ON v.user_id = cm.user_id AND v.video_id = cm.video_id
+        WHERE cm.user_id = $1 AND cm.role = 'user'
         GROUP BY v.channel_id
       ) ch ON ch.channel_id = c.channel_id
-      WHERE (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0`,
+      WHERE c.user_id = $1
+        AND (COALESCE(s.cnt, 0) + COALESCE(ch.cnt, 0)) > 0`,
+      [userId],
     );
     const totalMap = new Map<string, number>();
     for (const r of channelTotals as { channel_id: string; total: string | number }[]) {
@@ -189,12 +196,16 @@ export async function topTopicsByInteraction(limit = 10): Promise<TopicCount[]> 
     const { rows: folderRows } = await client.query(
       `SELECT cf.folder_id AS id, f.name, f.color, cf.channel_id
        FROM channel_folders cf
-       JOIN folders f ON f.id = cf.folder_id`,
+       JOIN folders f ON f.id = cf.folder_id
+       WHERE cf.user_id = $1`,
+      [userId],
     );
     const { rows: tagRows } = await client.query(
       `SELECT ct.tag_id AS id, t.name, t.color, ct.channel_id
        FROM channel_tags ct
-       JOIN tags t ON t.id = ct.tag_id`,
+       JOIN tags t ON t.id = ct.tag_id
+       WHERE ct.user_id = $1`,
+      [userId],
     );
 
     const topicMap = new Map<string, TopicCount>();
@@ -234,22 +245,23 @@ export async function topTopicsByInteraction(limit = 10): Promise<TopicCount[]> 
   }
 }
 
-export async function metricsSummary(): Promise<MetricsSummary> {
+export async function metricsSummary(userId: string): Promise<MetricsSummary> {
   const client = await getDb();
   try {
     const one = async (sql: string): Promise<number> => {
-      const { rows } = await client.query(sql);
+      const { rows } = await client.query(sql, [userId]);
       return Number(rows[0].n);
     };
 
     const total_channels = await one(`SELECT COUNT(DISTINCT v.channel_id) AS n
-                                      FROM summaries sm JOIN videos v ON v.video_id = sm.video_id`);
+                                      FROM summaries sm JOIN videos v ON v.user_id = sm.user_id AND v.video_id = sm.video_id
+                                      WHERE sm.user_id = $1`);
     const total_videos_cached = await one(`SELECT COUNT(DISTINCT video_id) AS n
-                                            FROM (SELECT video_id FROM summaries
+                                            FROM (SELECT video_id FROM summaries WHERE user_id = $1
                                                   UNION
-                                                  SELECT video_id FROM chat_messages WHERE role = 'user') AS t`);
-    const total_summaries = await one('SELECT COUNT(*) AS n FROM summaries');
-    const total_chats = await one(`SELECT COUNT(*) AS n FROM chat_messages WHERE role = 'user'`);
+                                                  SELECT video_id FROM chat_messages WHERE user_id = $1 AND role = 'user') AS t`);
+    const total_summaries = await one('SELECT COUNT(*) AS n FROM summaries WHERE user_id = $1');
+    const total_chats = await one(`SELECT COUNT(*) AS n FROM chat_messages WHERE user_id = $1 AND role = 'user'`);
 
     return {
       total_channels,
@@ -277,7 +289,7 @@ export async function metricsSummary(): Promise<MetricsSummary> {
  * right question: "of the videos that arrived this week, how many did I deal
  * with?" — not "how many total summaries did I make this week".
  */
-export async function coverageStats(weeks = 12): Promise<CoverageStat> {
+export async function coverageStats(userId: string, weeks = 12): Promise<CoverageStat> {
   const client = await getDb();
   try {
     // Bucket videos.created_at into ISO weeks. Postgres `date_trunc('week',…)`
@@ -291,7 +303,7 @@ export async function coverageStats(weeks = 12): Promise<CoverageStat> {
     }>(
       `WITH weeks AS (
          SELECT generate_series(
-           floor(extract(epoch from date_trunc('week', now() - ($1::int * interval '1 week'))))::bigint,
+           floor(extract(epoch from date_trunc('week', now() - ($2::int * interval '1 week'))))::bigint,
            floor(extract(epoch from date_trunc('week', now())))::bigint,
            604800
          ) AS ws
@@ -302,11 +314,12 @@ export async function coverageStats(weeks = 12): Promise<CoverageStat> {
            COUNT(*) AS new_count,
            COUNT(CASE WHEN sm.video_id IS NOT NULL OR vs.video_id IS NOT NULL THEN 1 END) AS processed_count
          FROM videos v
-         JOIN channels c ON c.channel_id = v.channel_id
-         LEFT JOIN summaries sm ON sm.video_id = v.video_id
-         LEFT JOIN video_states vs ON vs.video_id = v.video_id
-         WHERE c.hidden = 0
-           AND v.created_at >= floor(extract(epoch from date_trunc('week', now() - ($1::int * interval '1 week'))))::bigint
+         JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+         LEFT JOIN summaries sm ON sm.user_id = v.user_id AND sm.video_id = v.video_id
+         LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
+         WHERE v.user_id = $1
+           AND c.hidden = 0
+           AND v.created_at >= floor(extract(epoch from date_trunc('week', now() - ($2::int * interval '1 week'))))::bigint
          GROUP BY 1
        )
        SELECT w.ws AS week_start,
@@ -315,7 +328,7 @@ export async function coverageStats(weeks = 12): Promise<CoverageStat> {
        FROM weeks w
        LEFT JOIN buckets b ON b.ws = w.ws
        ORDER BY w.ws ASC`,
-      [weeks - 1],
+      [userId, weeks - 1],
     );
 
     const buckets: WeeklyBucket[] = rows.map(r => {
@@ -355,13 +368,13 @@ export async function coverageStats(weeks = 12): Promise<CoverageStat> {
   }
 }
 
-export async function getMetrics(): Promise<MetricsResult> {
+export async function getMetrics(userId: string): Promise<MetricsResult> {
   const [summary, top_channels, top_videos, top_topics, coverage] = await Promise.all([
-    metricsSummary(),
-    topChannelsByInteraction(10),
-    topVideosByInteraction(10),
-    topTopicsByInteraction(10),
-    coverageStats(),
+    metricsSummary(userId),
+    topChannelsByInteraction(userId, 10),
+    topVideosByInteraction(userId, 10),
+    topTopicsByInteraction(userId, 10),
+    coverageStats(userId),
   ]);
   return { summary, top_channels, top_videos, top_topics, coverage };
 }

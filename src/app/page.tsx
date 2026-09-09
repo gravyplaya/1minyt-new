@@ -4,7 +4,7 @@ import {
   PAGE_SIZE_OPTIONS,
 } from "@/lib/queries";
 import { listFolders, listTags, latestSyncRun } from "@/lib/repo";
-import { isConnected, getUserProfile } from "@/lib/tokens";
+import { resolvePageUser } from "@/lib/auth";
 import { AppShell } from "./_components/AppShell";
 import { ChannelList } from "./_components/ChannelList";
 import { LandingPage } from "./_components/landing/LandingPage";
@@ -25,21 +25,21 @@ interface PageProps {
 
 export default async function HomePage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const [
-    connected,
-    profile,
-    lastSync,
-    folders,
-    tags,
-    counts,
-  ] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    latestSyncRun(),
-    listFolders(),
-    listTags(),
-    countChannels(),
-  ]);
+  // TAV-68: resolve the session user first — user-scoped queries only run
+  // for a connected account; signed-out visitors get the landing page.
+  const { user, connected } = await resolvePageUser();
+  const data = connected && user
+    ? await Promise.all([
+        latestSyncRun(user.id),
+        listFolders(user.id),
+        listTags(user.id),
+        countChannels(user.id),
+      ])
+    : null;
+  const lastSync = data?.[0] ?? null;
+  const folders = data?.[1] ?? [];
+  const tags = data?.[2] ?? [];
+  const counts = data?.[3] ?? { total: 0, unfiled: 0, music: 0, hidden: 0 };
 
   const activeFolder = params.folder ?? null;
   const activeTag = params.tag ?? null;
@@ -88,7 +88,8 @@ export default async function HomePage({ searchParams }: PageProps) {
     <AppShell
       tab="channels"
       connected={connected}
-      profile={profile}
+      userId={user?.id ?? null}
+      profile={user}
       lastSync={lastSync?.started_at ?? null}
       activeHome={true}
       activeFolder={activeFolder}
@@ -97,12 +98,13 @@ export default async function HomePage({ searchParams }: PageProps) {
       showHidden={showHidden}
       mainStyle={{ maxWidth: 'none', width: '100%' }}
     >
-      {!connected ? (
+      {!connected || !user ? (
         <LandingPage />
       ) : counts.total === 0 ? (
         <FirstRunSync lastSync={lastSync} />
       ) : (
         <ChannelList
+          userId={user.id}
           search={search}
           folderId={activeFolder}
           tagId={activeTag}

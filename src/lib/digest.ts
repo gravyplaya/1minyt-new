@@ -32,8 +32,8 @@ export interface GenerateDigestResult {
  * POSTed to that URL (Discord/Slack-compatible). Webhook failures are recorded
  * in the digest's `errors` field but do not abort the run.
  */
-export async function generateDigest(maxPerChannel = 30): Promise<GenerateDigestResult> {
-  const channels = await listChannels({ hidden: false, includeMusic: true, limit: 500 });
+export async function generateDigest(userId: string, maxPerChannel = 30): Promise<GenerateDigestResult> {
+  const channels = await listChannels(userId, { hidden: false, includeMusic: true, limit: 500 });
   const errors: string[] = [];
   const newVideoIds: string[] = [];
   let channelsWithNew = 0;
@@ -43,13 +43,13 @@ export async function generateDigest(maxPerChannel = 30): Promise<GenerateDigest
   for (const channel of channels) {
     try {
       // Snapshot the video ids we already have for this channel *before* syncing.
-      const before = await listVideoIdsByChannel(channel.channel_id);
-      const result = await syncChannelVideos(channel.channel_id, maxPerChannel);
+      const before = await listVideoIdsByChannel(userId, channel.channel_id);
+      const result = await syncChannelVideos(userId, channel.channel_id, maxPerChannel);
       if (result.errors.length > 0) {
         errors.push(`${channel.title}: ${result.errors.join('; ')}`);
       }
       // Re-read after sync and diff.
-      const after = await listVideoIdsByChannel(channel.channel_id);
+      const after = await listVideoIdsByChannel(userId, channel.channel_id);
       const newIds = [...after].filter(id => !before.has(id));
       if (newIds.length > 0) {
         channelsWithNew += 1;
@@ -63,7 +63,7 @@ export async function generateDigest(maxPerChannel = 30): Promise<GenerateDigest
 
   // Compute the period window from the new videos' published_at timestamps.
   if (newVideoIds.length > 0) {
-    const videos = await listDigestVideos(newVideoIds);
+    const videos = await listDigestVideos(userId, newVideoIds);
     const publishedTs = videos
       .map(v => v.published_at)
       .filter((t): t is number => t != null);
@@ -89,10 +89,11 @@ export async function generateDigest(maxPerChannel = 30): Promise<GenerateDigest
   const client = await getDb();
   try {
     await client.query(
-      `INSERT INTO digests (id, period_start, period_end, video_count, new_video_ids, channel_count, errors, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO digests (id, user_id, period_start, period_end, video_count, new_video_ids, channel_count, errors, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         digest.id,
+        userId,
         digest.period_start,
         digest.period_end,
         digest.video_count,
@@ -110,14 +111,14 @@ export async function generateDigest(maxPerChannel = 30): Promise<GenerateDigest
   const webhookUrl = process.env.DIGEST_WEBHOOK_URL?.trim();
   if (webhookUrl && newVideoIds.length > 0) {
     try {
-      await postDigestWebhook(webhookUrl, digest);
+      await postDigestWebhook(webhookUrl, userId, digest);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Record the webhook failure on the stored row.
       const combined = [digest.errors, `webhook: ${msg}`].filter(Boolean).join('\n');
       const c = await getDb();
       try {
-        await c.query('UPDATE digests SET errors = $1 WHERE id = $2', [combined, digest.id]);
+        await c.query('UPDATE digests SET errors = $1 WHERE user_id = $2 AND id = $3', [combined, userId, digest.id]);
       } finally {
         c.release();
       }
@@ -130,9 +131,9 @@ export async function generateDigest(maxPerChannel = 30): Promise<GenerateDigest
 
 /**
  * Hydrate a digest row with the full video + channel details for display.
- * Returns null if the digest id doesn't exist.
+ * Returns null if the digest id doesn't exist for this user.
  */
-export async function getDigestWithVideos(digestId: string): Promise<DigestWithVideos | null> {
+export async function getDigestWithVideos(userId: string, digestId: string): Promise<DigestWithVideos | null> {
   const client = await getDb();
   let row: DigestRow | null = null;
   try {
@@ -145,7 +146,7 @@ export async function getDigestWithVideos(digestId: string): Promise<DigestWithV
       channel_count: number;
       errors: string | null;
       created_at: number;
-    }>('SELECT * FROM digests WHERE id = $1', [digestId]);
+    }>('SELECT * FROM digests WHERE user_id = $1 AND id = $2', [userId, digestId]);
     if (rows.length === 0) return null;
     const r = rows[0];
     let ids: string[] = [];
@@ -164,34 +165,35 @@ export async function getDigestWithVideos(digestId: string): Promise<DigestWithV
     client.release();
   }
 
-  const videos = await listDigestVideos(row.new_video_ids);
+  const videos = await listDigestVideos(userId, row.new_video_ids);
   return { ...row, videos };
 }
 
 /**
  * Return the most recent digest (by created_at), hydrated with video details.
- * Returns null if no digests exist yet.
+ * Returns null if no digests exist yet for this user.
  */
-export async function latestDigestWithVideos(): Promise<DigestWithVideos | null> {
+export async function latestDigestWithVideos(userId: string): Promise<DigestWithVideos | null> {
   const client = await getDb();
   let id: string | null = null;
   try {
     const { rows } = await client.query<{ id: string }>(
-      'SELECT id FROM digests ORDER BY created_at DESC LIMIT 1',
+      'SELECT id FROM digests WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [userId],
     );
     id = rows[0]?.id ?? null;
   } finally {
     client.release();
   }
   if (!id) return null;
-  return getDigestWithVideos(id);
+  return getDigestWithVideos(userId, id);
 }
 
 /**
  * List recent digest rows (newest first) without hydrating video details —
  * used for the digest history list on the /digests page.
  */
-export async function listRecentDigests(limit = 10): Promise<DigestRow[]> {
+export async function listRecentDigests(userId: string, limit = 10): Promise<DigestRow[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -204,8 +206,8 @@ export async function listRecentDigests(limit = 10): Promise<DigestRow[]> {
       errors: string | null;
       created_at: number;
     }>(
-      'SELECT * FROM digests ORDER BY created_at DESC LIMIT $1',
-      [limit],
+      'SELECT * FROM digests WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2',
+      [userId, limit],
     );
     return rows.map(r => {
       let ids: string[] = [];
@@ -233,8 +235,8 @@ export async function listRecentDigests(limit = 10): Promise<DigestRow[]> {
  * Discord and Slack incoming webhooks (a simple `content` string + `embeds`
  * for Discord, or a `text` field for Slack — we send both so either works).
  */
-async function postDigestWebhook(url: string, digest: DigestRow): Promise<void> {
-  const videos = await listDigestVideos(digest.new_video_ids);
+async function postDigestWebhook(url: string, userId: string, digest: DigestRow): Promise<void> {
+  const videos = await listDigestVideos(userId, digest.new_video_ids);
   const lines = videos.map(v =>
     `• [${v.title}](https://www.youtube.com/watch?v=${v.video_id}) — ${v.channel_title}`,
   );

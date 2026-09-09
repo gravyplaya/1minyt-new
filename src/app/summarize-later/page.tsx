@@ -1,7 +1,7 @@
 import { AppShell } from '../_components/AppShell';
 import { SummarizeLaterQueue } from '../_components/SummarizeLaterQueue';
 import { listQueueItems } from '@/lib/summarize-queue';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,14 +11,11 @@ export const metadata = {
 };
 
 export default async function SummarizeLaterPage() {
-  const [connected, profile, items] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    listQueueItems(),
-  ]);
+  const { user, connected } = await resolvePageUser();
+  const items = connected && user ? await listQueueItems(user.id) : [];
 
   return (
-    <AppShell tab="library" libraryActive="summarize-later" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+    <AppShell tab="library" libraryActive="summarize-later" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>🔖 Summarize Later</h1>
         <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>

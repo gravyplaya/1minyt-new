@@ -113,6 +113,7 @@ function hydrateEntry(row: JoinedRow): ExportEntry {
   };
 }
 
+// TAV-68: user-scoped join — $1 is always the owner's user id.
 const JOIN_SQL = `
   SELECT
     v.video_id,
@@ -130,25 +131,27 @@ const JOIN_SQL = `
   LEFT JOIN (
     SELECT DISTINCT ON (video_id) *
     FROM summaries
+    WHERE user_id = $1
     ORDER BY video_id, created_at DESC
-  ) s ON s.video_id = v.video_id
+  ) s ON s.user_id = v.user_id AND s.video_id = v.video_id
+  WHERE v.user_id = $1
 `;
 
 // ----- single channel --------------------------------------------------------
 
-export async function exportChannelSummaries(channelId: string, format: ExportFormat): Promise<ExportResult> {
+export async function exportChannelSummaries(userId: string, channelId: string, format: ExportFormat): Promise<ExportResult> {
   const client = await getDb();
   try {
     const channelRes = await client.query<Pick<ChannelRow, 'channel_id' | 'title'>>(
-      'SELECT channel_id, title FROM channels WHERE channel_id = $1',
-      [channelId],
+      'SELECT channel_id, title FROM channels WHERE user_id = $1 AND channel_id = $2',
+      [userId, channelId],
     );
     const channel = channelRes.rows[0];
     const channelTitle = channel?.title ?? channelId;
 
     const { rows } = await client.query<JoinedRow>(
-      `${JOIN_SQL} WHERE v.channel_id = $1 ORDER BY v.published_at DESC`,
-      [channelId],
+      `${JOIN_SQL} AND v.channel_id = $2 ORDER BY v.published_at DESC`,
+      [userId, channelId],
     );
 
     const entries = rows.map(r => {
@@ -174,16 +177,18 @@ export async function exportChannelSummaries(channelId: string, format: ExportFo
 
 // ----- all channels ----------------------------------------------------------
 
-export async function exportAllSummaries(format: ExportFormat): Promise<ExportResult> {
+export async function exportAllSummaries(userId: string, format: ExportFormat): Promise<ExportResult> {
   const client = await getDb();
   try {
     const channelRes = await client.query<Pick<ChannelRow, 'channel_id' | 'title'>>(
-      'SELECT channel_id, title FROM channels ORDER BY title',
+      'SELECT channel_id, title FROM channels WHERE user_id = $1 ORDER BY title',
+      [userId],
     );
     const channelTitles = new Map(channelRes.rows.map(r => [r.channel_id, r.title]));
 
     const { rows } = await client.query<JoinedRow>(
       `${JOIN_SQL} ORDER BY v.channel_id, v.published_at DESC`,
+      [userId],
     );
 
     const entries = rows.map(r => {

@@ -7,7 +7,7 @@ import { HeaderBar } from '../../../../_components/HeaderBar';
 import { PlaylistSummaryPanel } from '../../../../_components/PlaylistSummaryPanel';
 import { PlaylistVideosPanel } from '../../../../_components/PlaylistVideosPanel';
 import { formatCount, formatRelative, youtubePlaylistUrl } from '../../../../_lib/format';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser, ANON_USER_ID } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,12 +17,12 @@ interface Props {
 
 export default async function PlaylistDetailPage({ params }: Props) {
   const { id: channelId, playlistId } = await params;
+  const { user, connected } = await resolvePageUser();
+  const scopedUserId = user?.id ?? ANON_USER_ID;
 
-  const [channel, playlist, connected, profile] = await Promise.all([
-    getChannel(channelId),
-    getPlaylist(playlistId),
-    isConnected(),
-    getUserProfile(),
+  const [channel, playlist] = await Promise.all([
+    getChannel(scopedUserId, channelId),
+    getPlaylist(scopedUserId, playlistId),
   ]);
 
   // The channel must exist; the playlist may not be cached yet.
@@ -34,12 +34,12 @@ export default async function PlaylistDetailPage({ params }: Props) {
   const playlistBelongsToChannel = playlist?.channel_id === channelId;
 
   // Fetch videos + summary only when the playlist is cached and belongs here.
-  const videos = playlistBelongsToChannel ? await listPlaylistVideos(playlistId) : [];
-  const summary = playlistBelongsToChannel ? await getPlaylistSummary(playlistId) : null;
+  const videos = playlistBelongsToChannel ? await listPlaylistVideos(scopedUserId, playlistId) : [];
+  const summary = playlistBelongsToChannel ? await getPlaylistSummary(scopedUserId, playlistId) : null;
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} profile={profile} />
+      <HeaderBar connected={connected} signedIn={Boolean(user)} profile={user} />
       <main style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
         <div style={{ marginBottom: 14, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <Link href={`/c/${channelId}`} style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to {channel.title}</Link>

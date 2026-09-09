@@ -3,19 +3,27 @@ import Link from 'next/link';
 import type { UserProfile } from '@/lib/tokens';
 import { SyncButton } from './SyncButton';
 import { PasteUrlBox } from './PasteUrlBox';
-import { disconnectAction } from '@/app/actions';
+import { UserMenu } from './UserMenu';
 
 /**
  * The top app bar. Navigation lives in the left sidebar (home page);
- * this header keeps the brand, sync/disconnect controls, the
- * connected-account indicator, and the TAV-67 paste-a-URL box.
+ * this header keeps the brand, sync control, the connected-account
+ * dropdown, and the TAV-67 paste-a-URL box.
+ *
+ * TAV-68: `signedIn` (session) and `connected` (YouTube tokens) are separate
+ * states. Signed-in visitors get the user chip (avatar + channel name) with a
+ * dropdown holding "Disconnect YouTube" and "Sign out"; signed-out visitors
+ * get a Sign in link — which is the same Google OAuth flow as Connect (the
+ * callback creates the account and the session).
  */
 export function HeaderBar({
   connected,
+  signedIn,
   profile,
   lastSync,
 }: {
   connected: boolean;
+  signedIn: boolean;
   profile?: UserProfile | null;
   lastSync?: number | null;
 }) {
@@ -38,39 +46,28 @@ export function HeaderBar({
       <PasteUrlBox />
       <div className="header-meta" style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, color: '#8b8b94' }}>
         {connected && (
-          <>
-            <SyncButton lastSync={lastSync ?? null} />
-            <form action={disconnectAction}>
-              <button
-                className="btn btn-ghost"
-                type="submit"
-                style={{ fontSize: 12, padding: '6px 10px' }}
-              >
-                Disconnect
-              </button>
-            </form>
-          </>
+          <SyncButton lastSync={lastSync ?? null} />
         )}
-        {connected && profile?.displayName ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            {profile.avatarUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={profile.avatarUrl}
-                alt=""
-                width={24}
-                height={24}
-                style={{ borderRadius: '50%', objectFit: 'cover' }}
-              />
-            )}
-            <span style={{ color: '#e7e7ea', fontSize: 13 }}>{profile.displayName}</span>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#5cd9a3' }} />
-          </span>
+        {signedIn ? (
+          <UserMenu
+            connected={connected}
+            displayName={profile?.displayName ?? 'Account'}
+            avatarUrl={profile?.avatarUrl ?? null}
+          />
         ) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: connected ? '#5cd9a3' : '#5a5a64' }} />
-            {connected ? 'connected' : 'disconnected'}
-          </span>
+          <>
+            <a
+              href="/api/oauth/start"
+              className="btn btn-ghost"
+              style={{ fontSize: 12, padding: '6px 10px', textDecoration: 'none' }}
+            >
+              Sign in
+            </a>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#5a5a64' }} />
+              signed out
+            </span>
+          </>
         )}
       </div>
     </header>

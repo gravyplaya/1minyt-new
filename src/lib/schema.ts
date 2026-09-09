@@ -15,6 +15,105 @@
  *  - PRAGMA statements → removed (Postgres handles this differently)
  */
 
+// ----- TAV-68: multi-user migration statement builders -------------------------
+//
+// The multi-user block below needs three kinds of guarded DDL that plain
+// `ALTER ... IF EXISTS` can't express (PK swaps, FK re-points, unique-constraint
+// drops). Each builder emits a self-contained, idempotent statement — safe to
+// re-run on every cold start. See the TAV-68 block comment in
+// SCHEMA_STATEMENTS for the overall flow.
+
+/**
+ * Add a `user_id` column to a table, backfill any pre-multiuser rows to the
+ * legacy owner ('me'), then tighten the column to NOT NULL. The backfill is a
+ * no-op once every row is claimed, and SET NOT NULL is a no-op when already
+ * set — so the trio is safely re-runnable.
+ */
+function scopedColumnStatements(table: string): string[] {
+  return [
+    `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS user_id TEXT`,
+    `UPDATE ${table} SET user_id = 'me' WHERE user_id IS NULL`,
+    `ALTER TABLE ${table} ALTER COLUMN user_id SET NOT NULL`,
+  ];
+}
+
+/**
+ * Swap a table's primary key to a user-scoped composite. Dropping the old PK
+ * CASCADE-drops every child FK that depended on it; the composite replacements
+ * are added right after by {@link scopedForeignKey}. No-op (no drop, no
+ * re-add) once the PK already includes user_id — so post-migration cold starts
+ * stay cheap.
+ */
+function scopedPrimaryKey(table: string, cols: string[]): string {
+  return `DO $$
+DECLARE pk_name text;
+BEGIN
+  SELECT conname INTO pk_name FROM pg_constraint
+   WHERE conrelid = '${table}'::regclass AND contype = 'p';
+  IF pk_name IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint c
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+     WHERE c.conrelid = '${table}'::regclass
+       AND c.contype = 'p'
+       AND a.attname = 'user_id'
+  ) THEN
+    EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I CASCADE', '${table}', pk_name);
+    EXECUTE format('ALTER TABLE %I ADD PRIMARY KEY (${cols.join(', ')})', '${table}');
+  END IF;
+END $$;`;
+}
+
+/**
+ * Re-point a child table's FK at the user-scoped parent key. First drops any
+ * remaining legacy FK from the child to the parent (the parent's PK-swap
+ * CASCADE usually already did), then adds the named composite FK with the
+ * original ON DELETE CASCADE behaviour. No-op once the named constraint exists.
+ * Must run AFTER the parent's {@link scopedPrimaryKey} — the composite FK needs
+ * the parent's composite PK in place.
+ */
+function scopedForeignKey(
+  table: string,
+  name: string,
+  cols: string[],
+  parent: string,
+  parentCols: string[],
+): string {
+  return `DO $$
+DECLARE r record;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = '${name}' AND conrelid = '${table}'::regclass
+  ) THEN
+    FOR r IN
+      SELECT conname FROM pg_constraint
+       WHERE conrelid = '${table}'::regclass
+         AND confrelid = '${parent}'::regclass
+         AND contype = 'f'
+    LOOP
+      EXECUTE format('ALTER TABLE ${table} DROP CONSTRAINT %I', r.conname);
+    END LOOP;
+    ALTER TABLE ${table} ADD CONSTRAINT ${name}
+      FOREIGN KEY (${cols.join(', ')})
+      REFERENCES ${parent} (${parentCols.join(', ')})
+      ON DELETE CASCADE;
+  END IF;
+END $$;`;
+}
+
+/**
+ * Replace a pre-multiuser index with its user-scoped equivalent (same name,
+ * new column list). Re-running drops nothing and skips the create because the
+ * IF NOT EXISTS check sees the new definition already in place.
+ */
+function scopedIndex(table: string, name: string, cols: string): string[] {
+  return [
+    `DROP INDEX IF EXISTS ${name}`,
+    `CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${cols})`,
+  ];
+}
+
 export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS channels (
     channel_id       TEXT PRIMARY KEY,
@@ -472,6 +571,206 @@ export const SCHEMA_STATEMENTS: string[] = [
   // the presentation regardless of what the heuristic guesses. Additive ALTER
   // because CREATE TABLE IF NOT EXISTS won't add columns to an existing table.
   `ALTER TABLE videos ADD COLUMN IF NOT EXISTS video_pref TEXT`,
+
+  // ----- TAV-68: Multi-user — users, sessions, per-user data scoping -----------
+  //
+  // The app was born single-user: one shared pool of channels / videos /
+  // summaries / chats keyed only by YouTube ids, and one hardcoded 'me' OAuth
+  // token row (see lib/tokens.ts). Any second person who connected overwrote
+  // the token and merged their subscriptions into the same pool — every page
+  // showed the union of both users' data.
+  //
+  // This block installs the multi-user substrate, in order:
+  //  1. `users` + `sessions` (opaque session-id auth — see lib/auth.ts).
+  //  2. A legacy owner row ('me') when pre-multiuser data exists. The first
+  //     Google login after this migration claims that row (lib/auth.ts), so
+  //     the original owner keeps their library — deploy, then have the owner
+  //     log in BEFORE inviting anyone else.
+  //  3. A `user_id` column on every data table, backfilled to 'me' and NOT
+  //     NULL. Fresh databases get the columns via these same ALTERs (the
+  //     CREATE TABLE blocks above stay untouched per repo convention).
+  //  4. PK / unique surgery: keys that were bare YouTube ids become
+  //     user-scoped composites — (user_id, channel_id), (user_id, video_id),
+  //     etc. — so two users can hold the same channel/video independently.
+  //     Tables whose PK is an app-generated random id (summaries, chat rows,
+  //     ...) keep that PK and rely on query scoping + user-prefixed indexes.
+  //  5. FK re-points: composite FKs keep ON DELETE CASCADE working (deleting
+  //     a channel still deletes its videos, summaries, chats, ...).
+  //  6. User-prefixed replacements for the hot-path indexes.
+  //
+  // `user_id` columns deliberately carry NO FK to `users`: the '__anon'
+  // sentinel bucket (anonymous paste-a-URL, TAV-67) has no users row, and
+  // isolation is enforced by a user_id predicate in every query rather than
+  // by referential integrity.
+  //
+  // All surgery lives in guarded DO blocks (see the builders above) that
+  // no-op once applied, so SCHEMA_STATEMENTS stays safely re-runnable on every
+  // cold start. db.ts runs the whole array inside one transaction under an
+  // advisory lock — a mid-migration failure rolls back atomically and
+  // concurrent serverless cold starts can't race each other.
+
+  // -- 1. identity + sessions ---------------------------------------------------
+  `CREATE TABLE IF NOT EXISTS users (
+    id                TEXT PRIMARY KEY,
+    -- Stable identity: the YouTube channel id of the connected Google account
+    -- (channels.list?mine=true). NULL only for the unclaimed legacy owner.
+    google_channel_id TEXT UNIQUE,
+    display_name      TEXT,
+    avatar_url        TEXT,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
+
+  // -- 2. legacy owner row --------------------------------------------------------
+  //
+  // Created only when pre-multiuser data exists. The google_channel_id stays
+  // NULL until the first Google login claims it (findOrCreateUser in
+  // lib/auth.ts) — that login gets this row and, with it, all backfilled data.
+  `DO $$
+DECLARE now_sec integer := EXTRACT(EPOCH FROM NOW())::int;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id = 'me') THEN
+    IF EXISTS (SELECT 1 FROM oauth_tokens WHERE user_id = 'me') THEN
+      INSERT INTO users (id, google_channel_id, display_name, avatar_url, created_at, updated_at)
+      SELECT 'me', NULL, display_name, avatar_url, updated_at, updated_at
+        FROM oauth_tokens WHERE user_id = 'me';
+    ELSIF EXISTS (SELECT 1 FROM channels) THEN
+      -- Data predates multi-user but was never OAuth-connected.
+      INSERT INTO users (id, google_channel_id, created_at, updated_at)
+      VALUES ('me', NULL, now_sec, now_sec);
+    END IF;
+  END IF;
+END $$;`,
+
+  // -- 3. user_id columns (add → backfill → NOT NULL) -----------------------------
+  ...scopedColumnStatements('channels'),
+  ...scopedColumnStatements('folders'),
+  ...scopedColumnStatements('tags'),
+  ...scopedColumnStatements('channel_folders'),
+  ...scopedColumnStatements('channel_tags'),
+  ...scopedColumnStatements('sync_runs'),
+  ...scopedColumnStatements('videos'),
+  ...scopedColumnStatements('summaries'),
+  ...scopedColumnStatements('transcript_segments'),
+  ...scopedColumnStatements('transcript_chunks'),
+  ...scopedColumnStatements('chat_messages'),
+  ...scopedColumnStatements('video_chapters'),
+  ...scopedColumnStatements('digests'),
+  ...scopedColumnStatements('video_comments'),
+  ...scopedColumnStatements('video_states'),
+  ...scopedColumnStatements('summarize_queue'),
+  ...scopedColumnStatements('channel_playlists'),
+  ...scopedColumnStatements('playlist_videos'),
+  ...scopedColumnStatements('playlist_summaries'),
+  ...scopedColumnStatements('video_references'),
+  ...scopedColumnStatements('integration_settings'),
+  ...scopedColumnStatements('video_likes'),
+  ...scopedColumnStatements('video_play_history'),
+  ...scopedColumnStatements('queue_pins'),
+  ...scopedColumnStatements('library_chat_messages'),
+  ...scopedColumnStatements('channel_dossiers'),
+
+  // -- 4. PK surgery (parents before children; FKs restored in step 5) -----------
+  scopedPrimaryKey('channels', ['user_id', 'channel_id']),
+  scopedPrimaryKey('channel_folders', ['user_id', 'channel_id', 'folder_id']),
+  scopedPrimaryKey('channel_tags', ['user_id', 'channel_id', 'tag_id']),
+  scopedPrimaryKey('videos', ['user_id', 'video_id']),
+  scopedPrimaryKey('transcript_segments', ['user_id', 'video_id', 'seg_index']),
+  scopedPrimaryKey('video_chapters', ['user_id', 'video_id']),
+  scopedPrimaryKey('video_comments', ['user_id', 'video_id']),
+  scopedPrimaryKey('video_states', ['user_id', 'video_id']),
+  scopedPrimaryKey('video_likes', ['user_id', 'video_id']),
+  scopedPrimaryKey('video_play_history', ['user_id', 'video_id']),
+  scopedPrimaryKey('queue_pins', ['user_id', 'queue', 'video_id']),
+  scopedPrimaryKey('channel_playlists', ['user_id', 'playlist_id']),
+  scopedPrimaryKey('playlist_videos', ['user_id', 'playlist_id', 'video_id']),
+  scopedPrimaryKey('channel_dossiers', ['user_id', 'channel_id']),
+  scopedPrimaryKey('integration_settings', ['user_id', 'key']),
+
+  // -- 5. composite FKs (children of channels) ------------------------------------
+  scopedForeignKey('videos', 'videos_channel_fk', ['user_id', 'channel_id'], 'channels', ['user_id', 'channel_id']),
+  scopedForeignKey('channel_folders', 'channel_folders_channel_fk', ['user_id', 'channel_id'], 'channels', ['user_id', 'channel_id']),
+  scopedForeignKey('channel_tags', 'channel_tags_channel_fk', ['user_id', 'channel_id'], 'channels', ['user_id', 'channel_id']),
+  scopedForeignKey('channel_playlists', 'channel_playlists_channel_fk', ['user_id', 'channel_id'], 'channels', ['user_id', 'channel_id']),
+  scopedForeignKey('channel_dossiers', 'channel_dossiers_channel_fk', ['user_id', 'channel_id'], 'channels', ['user_id', 'channel_id']),
+
+  // -- 5b. composite FKs (children of videos) -------------------------------------
+  scopedForeignKey('summaries', 'summaries_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('transcript_segments', 'transcript_segments_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('transcript_chunks', 'transcript_chunks_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('chat_messages', 'chat_messages_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('video_chapters', 'video_chapters_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('video_comments', 'video_comments_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('video_states', 'video_states_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('video_likes', 'video_likes_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('video_play_history', 'video_play_history_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('queue_pins', 'queue_pins_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('summarize_queue', 'summarize_queue_video_fk', ['user_id', 'video_id'], 'videos', ['user_id', 'video_id']),
+  scopedForeignKey('video_references', 'video_references_video_fk', ['user_id', 'source_video_id'], 'videos', ['user_id', 'video_id']),
+
+  // -- 5c. composite FKs (children of channel_playlists) ---------------------------
+  scopedForeignKey('playlist_videos', 'playlist_videos_playlist_fk', ['user_id', 'playlist_id'], 'channel_playlists', ['user_id', 'playlist_id']),
+  scopedForeignKey('playlist_summaries', 'playlist_summaries_playlist_fk', ['user_id', 'playlist_id'], 'channel_playlists', ['user_id', 'playlist_id']),
+  // NOTE: channel_folders.folder_id → folders(id) and channel_tags.tag_id →
+  // tags(id) stay single-column — folders/tags keep their app-generated id PK.
+  // Ownership of the linked folder/tag is enforced at the query layer.
+
+  // -- 6a. per-user uniqueness (folders / tags names, caches) ----------------------
+  `ALTER TABLE folders DROP CONSTRAINT IF EXISTS folders_name_key`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_folders_user_name ON folders(user_id, name)`,
+  `ALTER TABLE tags DROP CONSTRAINT IF EXISTS tags_name_key`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_user_name ON tags(user_id, name)`,
+  // summaries: one row per (user, video, model) — replaces uq_video_model.
+  `DROP INDEX IF EXISTS uq_video_model`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_summaries_user_video_model ON summaries(user_id, video_id, model)`,
+  // summarize_queue: one active entry per (user, video).
+  `DROP INDEX IF EXISTS uq_summarize_queue_video`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_summarize_queue_user_video ON summarize_queue(user_id, video_id)`,
+  // playlist_summaries: one row per (user, playlist).
+  `DROP INDEX IF EXISTS uq_playlist_summary`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_playlist_summary_user ON playlist_summaries(user_id, playlist_id)`,
+
+  // -- 6b. user-prefixed hot-path indexes -------------------------------------------
+  ...scopedIndex('channels', 'idx_channels_title', 'user_id, title'),
+  ...scopedIndex('channels', 'idx_channels_handle', 'user_id, handle'),
+  ...scopedIndex('channels', 'idx_channels_music_flag', 'user_id, music_flag'),
+  ...scopedIndex('channels', 'idx_channels_subscriber', 'user_id, COALESCE(subscriber_count, 0)'),
+  ...scopedIndex('videos', 'idx_videos_channel', 'user_id, channel_id, published_at DESC'),
+  ...scopedIndex('videos', 'idx_videos_status', 'user_id, transcript_status'),
+  ...scopedIndex('summaries', 'idx_summaries_video', 'user_id, video_id, created_at DESC'),
+  ...scopedIndex('summaries', 'idx_summaries_bookmarked', 'user_id, bookmarked, created_at DESC'),
+  ...scopedIndex('chat_messages', 'idx_chat_video', 'user_id, video_id, created_at'),
+  ...scopedIndex('transcript_chunks', 'idx_chunks_video', 'user_id, video_id, chunk_index'),
+  ...scopedIndex('transcript_chunks', 'idx_chunks_video_type', 'user_id, video_id, chunk_type'),
+  ...scopedIndex('library_chat_messages', 'idx_library_chat_scope', 'user_id, scope, created_at'),
+  ...scopedIndex('queue_pins', 'idx_queue_pins_queue_pos', 'user_id, queue, position ASC, pinned_at DESC'),
+  ...scopedIndex('summarize_queue', 'idx_summarize_queue_state', 'user_id, state, queued_at DESC'),
+  ...scopedIndex('video_states', 'idx_video_states_state', 'user_id, state, updated_at DESC'),
+  ...scopedIndex('video_likes', 'idx_video_likes_liked_at', 'user_id, liked_at DESC'),
+  ...scopedIndex('video_play_history', 'idx_video_history_last_played', 'user_id, last_played_at DESC'),
+  ...scopedIndex('sync_runs', 'idx_sync_runs_started', 'user_id, started_at DESC'),
+  ...scopedIndex('digests', 'idx_digests_created', 'user_id, created_at DESC'),
+  ...scopedIndex('channel_playlists', 'idx_channel_playlists_channel', 'user_id, channel_id, title'),
+  ...scopedIndex('playlist_videos', 'idx_playlist_videos_position', 'user_id, playlist_id, position'),
+  ...scopedIndex('video_references', 'idx_video_refs_source', 'user_id, source_video_id'),
+  ...scopedIndex('video_references', 'idx_video_refs_target_video', 'user_id, target_video_id'),
+  ...scopedIndex('video_references', 'idx_video_refs_target_channel', 'user_id, target_channel_id'),
+  ...scopedIndex('video_comments', 'idx_video_comments_updated', 'user_id, updated_at DESC'),
+  ...scopedIndex('video_chapters', 'idx_video_chapters_created', 'user_id, created_at DESC'),
+  ...scopedIndex('folders', 'idx_folders_position', 'user_id, position, name'),
+  ...scopedIndex('channel_folders', 'idx_channel_folders_folder', 'user_id, folder_id'),
+  ...scopedIndex('channel_tags', 'idx_channel_tags_tag', 'user_id, tag_id'),
+  // transcript_segments: the composite PK (user_id, video_id, seg_index)
+  // fully covers the old idx_tsegs_video — just drop it.
+  `DROP INDEX IF EXISTS idx_tsegs_video`,
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

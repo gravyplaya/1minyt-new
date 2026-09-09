@@ -21,6 +21,7 @@ import type { PlaylistRow, PlaylistVideoRow, PlaylistSummary, PlaylistWithChanne
  * with sync.
  */
 export async function upsertChannelPlaylists(
+  userId: string,
   channelId: string,
   playlists: ChannelPlaylist[],
 ): Promise<void> {
@@ -32,15 +33,15 @@ export async function upsertChannelPlaylists(
     // replace operation runs in a single transaction — if any insert fails, the
     // prior rows are restored (matches the setChannelFolders pattern in repo.ts).
     await client.query('BEGIN');
-    await client.query('DELETE FROM channel_playlists WHERE channel_id = $1', [channelId]);
+    await client.query('DELETE FROM channel_playlists WHERE user_id = $1 AND channel_id = $2', [userId, channelId]);
     for (const p of playlists) {
       if (!p.playlist_id) continue;
       await client.query(
         `INSERT INTO channel_playlists (
-          playlist_id, channel_id, title, description,
+          user_id, playlist_id, channel_id, title, description,
           thumbnail_url, item_count, published_at, synced_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (playlist_id) DO UPDATE SET
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (user_id, playlist_id) DO UPDATE SET
           channel_id = excluded.channel_id,
           title = excluded.title,
           description = excluded.description,
@@ -49,6 +50,7 @@ export async function upsertChannelPlaylists(
           published_at = excluded.published_at,
           synced_at = excluded.synced_at`,
         [
+          userId,
           p.playlist_id,
           p.channel_id,
           p.title,
@@ -73,16 +75,16 @@ export async function upsertChannelPlaylists(
  * List a channel's cached curated playlists, ordered alphabetically by title.
  * Returns an empty array when playlists haven't been fetched yet.
  */
-export async function listChannelPlaylists(channelId: string): Promise<PlaylistRow[]> {
+export async function listChannelPlaylists(userId: string, channelId: string): Promise<PlaylistRow[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<PlaylistRow>(
       `SELECT playlist_id, channel_id, title, description,
               thumbnail_url, item_count, published_at, synced_at
        FROM channel_playlists
-       WHERE channel_id = $1
+       WHERE user_id = $1 AND channel_id = $2
        ORDER BY title ASC`,
-      [channelId],
+      [userId, channelId],
     );
     return rows;
   } finally {
@@ -95,7 +97,7 @@ export async function listChannelPlaylists(channelId: string): Promise<PlaylistR
  * the playlist detail page header. Returns null when the playlist isn't cached
  * locally (the user should fetch playlists from the channel page first).
  */
-export async function getPlaylist(playlistId: string): Promise<PlaylistWithChannel | null> {
+export async function getPlaylist(userId: string, playlistId: string): Promise<PlaylistWithChannel | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -116,9 +118,9 @@ export async function getPlaylist(playlistId: string): Promise<PlaylistWithChann
          c.title AS channel_title,
          c.thumbnail_url AS channel_thumbnail_url
        FROM channel_playlists p
-       JOIN channels c ON c.channel_id = p.channel_id
-       WHERE p.playlist_id = $1`,
-      [playlistId],
+       JOIN channels c ON c.user_id = p.user_id AND c.channel_id = p.channel_id
+       WHERE p.user_id = $1 AND p.playlist_id = $2`,
+      [userId, playlistId],
     );
     if (rows.length === 0) return null;
     const r = rows[0];
@@ -148,6 +150,7 @@ export async function getPlaylist(playlistId: string): Promise<PlaylistWithChann
  * main `videos` table as a baseline so the summarize pipeline can find it.
  */
 export async function upsertPlaylistVideos(
+  userId: string,
   playlistId: string,
   videos: PlaylistVideo[],
 ): Promise<void> {
@@ -157,15 +160,15 @@ export async function upsertPlaylistVideos(
     // Snapshot-replace in a transaction so a failed insert midway doesn't leave
     // the playlist with a partial video set (the prior rows are already gone).
     await client.query('BEGIN');
-    await client.query('DELETE FROM playlist_videos WHERE playlist_id = $1', [playlistId]);
+    await client.query('DELETE FROM playlist_videos WHERE user_id = $1 AND playlist_id = $2', [userId, playlistId]);
     for (const v of videos) {
       if (!v.video_id) continue;
       await client.query(
         `INSERT INTO playlist_videos (
-          playlist_id, video_id, title, description,
+          user_id, playlist_id, video_id, title, description,
           thumbnail_url, position, published_at, synced_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (playlist_id, video_id) DO UPDATE SET
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (user_id, playlist_id, video_id) DO UPDATE SET
           title = excluded.title,
           description = excluded.description,
           thumbnail_url = excluded.thumbnail_url,
@@ -173,6 +176,7 @@ export async function upsertPlaylistVideos(
           published_at = excluded.published_at,
           synced_at = excluded.synced_at`,
         [
+          userId,
           playlistId,
           v.video_id,
           v.title,
@@ -197,7 +201,7 @@ export async function upsertPlaylistVideos(
  * List the cached videos for a playlist, in playlist order (position ascending),
  * hydrated with duration + summary-presence from the main `videos` table.
  */
-export async function listPlaylistVideos(playlistId: string): Promise<PlaylistVideoRow[]> {
+export async function listPlaylistVideos(userId: string, playlistId: string): Promise<PlaylistVideoRow[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -214,12 +218,12 @@ export async function listPlaylistVideos(playlistId: string): Promise<PlaylistVi
          pv.video_id, pv.title, pv.description, pv.thumbnail_url,
          pv.position, pv.published_at,
          v.duration_seconds AS duration_seconds,
-         (SELECT COUNT(*) FROM summaries s WHERE s.video_id = pv.video_id) AS summary_count
+         (SELECT COUNT(*) FROM summaries s WHERE s.user_id = pv.user_id AND s.video_id = pv.video_id) AS summary_count
        FROM playlist_videos pv
-       LEFT JOIN videos v ON v.video_id = pv.video_id
-       WHERE pv.playlist_id = $1
+       LEFT JOIN videos v ON v.user_id = pv.user_id AND v.video_id = pv.video_id
+       WHERE pv.user_id = $1 AND pv.playlist_id = $2
        ORDER BY pv.position ASC`,
-      [playlistId],
+      [userId, playlistId],
     );
     return rows.map(r => ({
       video_id: r.video_id,
@@ -238,12 +242,12 @@ export async function listPlaylistVideos(playlistId: string): Promise<PlaylistVi
 }
 
 /** Return the set of video_ids currently cached for a playlist. */
-export async function listPlaylistVideoIds(playlistId: string): Promise<Set<string>> {
+export async function listPlaylistVideoIds(userId: string, playlistId: string): Promise<Set<string>> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ video_id: string }>(
-      'SELECT video_id FROM playlist_videos WHERE playlist_id = $1',
-      [playlistId],
+      'SELECT video_id FROM playlist_videos WHERE user_id = $1 AND playlist_id = $2',
+      [userId, playlistId],
     );
     return new Set(rows.map(r => r.video_id));
   } finally {
@@ -255,9 +259,9 @@ export async function listPlaylistVideoIds(playlistId: string): Promise<Set<stri
 
 /**
  * Persist (or overwrite) the LLM-generated synthesis for a playlist. Upserts
- * by playlist_id — re-summarizing replaces the prior synthesis.
+ * by (user, playlist) — re-summarizing replaces the prior synthesis.
  */
-export async function savePlaylistSummary(input: {
+export async function savePlaylistSummary(userId: string, input: {
   playlist_id: string;
   model: string;
   synthesis: string;
@@ -272,9 +276,9 @@ export async function savePlaylistSummary(input: {
     const themesJson = JSON.stringify(input.themes);
     const startHereJson = JSON.stringify(input.start_here);
     await client.query(
-      `INSERT INTO playlist_summaries (id, playlist_id, model, synthesis, themes, start_here, token_count, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (playlist_id) DO UPDATE SET
+      `INSERT INTO playlist_summaries (id, user_id, playlist_id, model, synthesis, themes, start_here, token_count, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (user_id, playlist_id) DO UPDATE SET
         id = excluded.id,
         model = excluded.model,
         synthesis = excluded.synthesis,
@@ -282,7 +286,7 @@ export async function savePlaylistSummary(input: {
         start_here = excluded.start_here,
         token_count = excluded.token_count,
         created_at = excluded.created_at`,
-      [id, input.playlist_id, input.model, input.synthesis, themesJson, startHereJson, input.token_count, now],
+      [id, userId, input.playlist_id, input.model, input.synthesis, themesJson, startHereJson, input.token_count, now],
     );
     return {
       id,
@@ -300,7 +304,7 @@ export async function savePlaylistSummary(input: {
 }
 
 /** Fetch a playlist's cached synthesis, or null when not yet summarized. */
-export async function getPlaylistSummary(playlistId: string): Promise<PlaylistSummary | null> {
+export async function getPlaylistSummary(userId: string, playlistId: string): Promise<PlaylistSummary | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -313,8 +317,8 @@ export async function getPlaylistSummary(playlistId: string): Promise<PlaylistSu
       token_count: number | null;
       created_at: number;
     }>(
-      'SELECT id, playlist_id, model, synthesis, themes, start_here, token_count, created_at FROM playlist_summaries WHERE playlist_id = $1',
-      [playlistId],
+      'SELECT id, playlist_id, model, synthesis, themes, start_here, token_count, created_at FROM playlist_summaries WHERE user_id = $1 AND playlist_id = $2',
+      [userId, playlistId],
     );
     if (rows.length === 0) return null;
     const r = rows[0];

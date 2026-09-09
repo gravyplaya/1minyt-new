@@ -22,6 +22,8 @@ const DEFAULT_CHAT_MODEL = process.env.CHAT_MODEL?.trim() || 'openrouter/free';
 const MAX_HISTORY = 10; // last N messages to include as context
 
 export interface ChatInput {
+  /** TAV-68: owner of the video row + chunks being searched. */
+  userId: string;
   videoId: string;
   videoTitle: string;
   question: string;
@@ -44,7 +46,7 @@ export async function chatWithVideo(input: ChatInput): Promise<ChatResult> {
   if (!apiKey) throw new Error('Missing OPENROUTER_API_KEY — set it in .env to enable chat.');
 
   // 1. Retrieve relevant chunks.
-  const results = await search(input.videoId, input.question, 5);
+  const results = await search(input.userId, input.videoId, input.question, 5);
   const retrievedChunks: TranscriptChunk[] = results.map(r => r.chunk);
 
   // 2. Build context with timestamp markers.

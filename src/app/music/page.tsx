@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { buildMusicQueue, listMusicLibrary } from '@/lib/queue';
 import { getVideo } from '@/lib/video-repo';
 import { computeMusicVideoPresentation } from '@/lib/music-video-pref';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser } from '@/lib/auth';
 import { AppShell } from '../_components/AppShell';
 import { MusicQueue, MusicLibrarySection } from '../_components/MusicQueue';
 import type { MusicLibraryGroup, MusicQueueItem } from '@/lib/types';
@@ -39,12 +39,12 @@ interface PageProps {
  */
 export default async function MusicPage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const [connected, profile, queue, library] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    buildMusicQueue(20),
-    listMusicLibrary(),
-  ]);
+  // TAV-68: music queues/library are personal — signed-out visitors see the
+  // empty state instead of anyone's data.
+  const { user, connected } = await resolvePageUser();
+  const [queue, library] = connected && user
+    ? await Promise.all([buildMusicQueue(user.id, 20), listMusicLibrary(user.id)])
+    : [[] as MusicQueueItem[], [] as MusicLibraryGroup[]];
 
   const requestedId = params.v?.trim();
 
@@ -81,7 +81,7 @@ export default async function MusicPage({ searchParams }: PageProps) {
     // (the library shape doesn't carry tags/category/video_pref).
     nowPlaying =
       queue.find((q) => q.video_id === libraryMatch.video_id) ??
-      (await hydrateLibraryTrackAsQueueItem(libraryMatch));
+      (await hydrateLibraryTrackAsQueueItem(user?.id ?? '', libraryMatch));
     if (queueView) {
       // Queue-driven view: Up Next is the ranked queue minus the playing
       // track — what a cold load showed before now-playing was pinned.
@@ -116,7 +116,7 @@ export default async function MusicPage({ searchParams }: PageProps) {
 
   if (!nowPlaying) {
     return (
-      <AppShell tab="music" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+      <AppShell tab="music" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
         {library.length > 0 ? (
           <div style={{ maxWidth: 720, margin: '0 auto' }}>
             <h2 style={{ fontSize: 22, fontWeight: 600, margin: '40px 0 8px' }}>
@@ -135,7 +135,7 @@ export default async function MusicPage({ searchParams }: PageProps) {
   }
 
   return (
-    <AppShell tab="music" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+    <AppShell tab="music" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <MusicQueue queue={orderedQueue} nowPlaying={nowPlaying} library={library} />
     </AppShell>
   );
@@ -164,9 +164,10 @@ function EmptyMusicState({ connected }: { connected: boolean }) {
  * missing (deleted between renders — never in practice).
  */
 async function hydrateLibraryTrackAsQueueItem(
+  userId: string,
   track: MusicLibraryGroup['tracks'][number],
 ): Promise<MusicQueueItem> {
-  const row = await getVideo(track.video_id);
+  const row = await getVideo(userId, track.video_id);
   const presentation = computeMusicVideoPresentation({
     title: row?.title ?? track.title,
     channelTitle: track.channel_title,

@@ -72,6 +72,8 @@ export function parseScope(raw: string | null | undefined): ParsedScope {
 // ----- standard (single-shot RAG) chat ------------------------------------------
 
 export interface LibraryChatInput {
+  /** TAV-68: owner of the corpus + thread being searched. */
+  userId: string;
   question: string;
   scope: string;
   history: HistoryMessage[];
@@ -81,14 +83,17 @@ export interface LibraryChatInput {
  * One grounded Q&A turn over the library (or a scope of it). Retrieves the
  * top-k matching chunks across the corpus, builds a citation-numbered context
  * block, and asks the model to answer with [N] citations.
+ *
+ * TAV-68: retrieval is user-scoped — a scope id belonging to another user
+ * simply matches no rows, so scoped chat can never cross libraries.
  */
 export async function chatWithLibrary(input: LibraryChatInput): Promise<LibraryChatResult> {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (!apiKey) throw new Error('Missing OPENROUTER_API_KEY — set it in .env to enable chat.');
 
   const scope = parseScope(input.scope);
-  const hits = await searchLibrary(input.question, STANDARD_K, scopeToFilter(scope));
-  return completeLibraryAnswer({ apiKey, question: input.question, scope, hits, history: input.history });
+  const hits = await searchLibrary(input.userId, input.question, STANDARD_K, scopeToFilter(scope));
+  return completeLibraryAnswer({ userId: input.userId, apiKey, question: input.question, scope, hits, history: input.history });
 }
 
 /**
@@ -107,6 +112,8 @@ function scopeToFilter(scope: ParsedScope): { channelId?: string | null; folderI
 // ----- Deep Research (agentic) chat ---------------------------------------------
 
 export interface AgentChatInput {
+  /** TAV-68: owner of the corpus + thread being searched. */
+  userId: string;
   question: string;
   scope: string;
   history: HistoryMessage[];
@@ -181,7 +188,7 @@ export async function chatWithLibraryAgent(input: AgentChatInput): Promise<Agent
       let resultJson: string;
       try {
         const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
-        resultJson = await executeTool(call.function.name, args, filter, citations, toolCalls);
+        resultJson = await executeTool(input.userId, call.function.name, args, filter, citations, toolCalls);
       } catch (err) {
         resultJson = JSON.stringify({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -224,6 +231,7 @@ async function completePlain(apiKey: string, messages: Array<Record<string, unkn
 // ----- shared completion ----------------------------------------------------------
 
 interface CompleteArgs {
+  userId: string;
   apiKey: string;
   question: string;
   scope: ParsedScope;
@@ -233,7 +241,7 @@ interface CompleteArgs {
 
 /** Build the final prompt from retrieved hits and call OpenRouter once. */
 async function completeLibraryAnswer(args: CompleteArgs): Promise<LibraryChatResult> {
-  const { apiKey, question, scope, hits, history } = args;
+  const { userId, apiKey, question, scope, hits, history } = args;
 
   const numbered = hits.map((h, i) => ({
     citation: {
@@ -260,7 +268,7 @@ async function completeLibraryAnswer(args: CompleteArgs): Promise<LibraryChatRes
       ].join('\n')
     : `(No indexed transcript or summary excerpts matched this question in ${scope.label}. Answer from general knowledge, but say clearly that nothing in the indexed library covers it.)`;
 
-  const dossierBlock = scope.kind === 'channel' ? await buildDossierBlock(scope.id) : '';
+  const dossierBlock = scope.kind === 'channel' ? await buildDossierBlock(userId, scope.id) : '';
 
   const system = [
     'You are a research assistant answering questions about the user\'s YouTube library.',
@@ -308,10 +316,10 @@ async function completeLibraryAnswer(args: CompleteArgs): Promise<LibraryChatRes
 // ----- dossier injection (G) -------------------------------------------------------
 
 /** Load the channel dossier for a channel-scoped chat, as a prompt block. */
-async function buildDossierBlock(channelId: string | null): Promise<string> {
+async function buildDossierBlock(userId: string, channelId: string | null): Promise<string> {
   if (!channelId) return '';
   try {
-    const dossier = await loadDossier(channelId);
+    const dossier = await loadDossier(userId, channelId);
     if (!dossier) return '';
     return [
       'Channel memory (a distillation of this channel\'s summarized videos):',
@@ -392,6 +400,7 @@ const TOOLS = [
  * accumulate citations as a side effect so the final answer can show them.
  */
 async function executeTool(
+  userId: string,
   name: string,
   args: Record<string, unknown>,
   filter: ToolFilter,
@@ -405,7 +414,7 @@ async function executeTool(
       if (!query) return JSON.stringify({ results: [], note: 'Empty query.' });
       const limit = clamp(Number(args.limit ?? 6) || 6, 1, 12);
       const chunkType = name === 'search_summaries' ? 'summary' : 'transcript';
-      const hits = await searchLibrary(query, limit, { ...filter, chunkType });
+      const hits = await searchLibrary(userId, query, limit, { ...filter, chunkType });
       for (const h of hits) {
         if (citations.length >= 24) break;
         citations.push({
@@ -434,7 +443,7 @@ async function executeTool(
 
     case 'list_channels': {
       const filterText = String(args.filter ?? '').trim().toLowerCase();
-      const channels = await listChannels({ includeMusic: true, hidden: true, limit: 500 });
+      const channels = await listChannels(userId, { includeMusic: true, hidden: true, limit: 500 });
       const filtered = filterText
         ? channels.filter(c => c.title.toLowerCase().includes(filterText) || (c.handle ?? '').toLowerCase().includes(filterText))
         : channels.slice(0, 60);
@@ -449,10 +458,10 @@ async function executeTool(
       const channelId = String(args.channel_id ?? '').trim();
       if (!channelId) return JSON.stringify({ error: 'channel_id is required.' });
       const [dossier, videos] = await Promise.all([
-        loadDossier(channelId).catch(() => null),
-        listVideosByChannel(channelId, 10).catch(() => []),
+        loadDossier(userId, channelId).catch(() => null),
+        listVideosByChannel(userId, channelId, 10).catch(() => []),
       ]);
-      const channel = await import('./repo').then(m => m.getChannel(channelId));
+      const channel = await import('./repo').then(m => m.getChannel(userId, channelId));
       toolCalls.push('get_channel_profile()');
       return JSON.stringify({
         channel: channel?.title ?? channelId,

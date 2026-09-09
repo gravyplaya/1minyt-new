@@ -58,12 +58,12 @@ export interface IntegrationSettings {
 }
 
 /** Load the settings for a single integration. Returns null when not configured. */
-export async function getIntegrationSettings(key: IntegrationKey): Promise<IntegrationSettings | null> {
+export async function getIntegrationSettings(userId: string, key: IntegrationKey): Promise<IntegrationSettings | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ key: string; token: string; options: string; updated_at: number }>(
-      'SELECT key, token, options, updated_at FROM integration_settings WHERE key = $1',
-      [key],
+      'SELECT key, token, options, updated_at FROM integration_settings WHERE user_id = $1 AND key = $2',
+      [userId, key],
     );
     if (rows.length === 0) return null;
     let options: Record<string, string> = {};
@@ -75,11 +75,12 @@ export async function getIntegrationSettings(key: IntegrationKey): Promise<Integ
 }
 
 /** Load settings for all integrations at once (for the settings page). */
-export async function listIntegrationSettings(): Promise<Map<IntegrationKey, IntegrationSettings>> {
+export async function listIntegrationSettings(userId: string): Promise<Map<IntegrationKey, IntegrationSettings>> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ key: string; token: string; options: string; updated_at: number }>(
-      'SELECT key, token, options, updated_at FROM integration_settings',
+      'SELECT key, token, options, updated_at FROM integration_settings WHERE user_id = $1',
+      [userId],
     );
     const out = new Map<IntegrationKey, IntegrationSettings>();
     for (const r of rows) {
@@ -94,20 +95,20 @@ export async function listIntegrationSettings(): Promise<Map<IntegrationKey, Int
 }
 
 /** Upsert a token + options for an integration. An empty token deletes the row. */
-export async function saveIntegrationSettings(key: IntegrationKey, token: string, options?: Record<string, string>): Promise<void> {
+export async function saveIntegrationSettings(userId: string, key: IntegrationKey, token: string, options?: Record<string, string>): Promise<void> {
   const trimmed = token.trim();
   const client = await getDb();
   try {
     if (!trimmed) {
-      await client.query('DELETE FROM integration_settings WHERE key = $1', [key]);
+      await client.query('DELETE FROM integration_settings WHERE user_id = $1 AND key = $2', [userId, key]);
       return;
     }
     const now = Math.floor(Date.now() / 1000);
     await client.query(
-      `INSERT INTO integration_settings (key, token, options, updated_at)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (key) DO UPDATE SET token = excluded.token, options = excluded.options, updated_at = excluded.updated_at`,
-      [key, trimmed, JSON.stringify(options ?? {}), now],
+      `INSERT INTO integration_settings (user_id, key, token, options, updated_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (user_id, key) DO UPDATE SET token = excluded.token, options = excluded.options, updated_at = excluded.updated_at`,
+      [userId, key, trimmed, JSON.stringify(options ?? {}), now],
     );
   } finally {
     client.release();
