@@ -511,11 +511,16 @@ export async function fetchChannels(accessToken: string, channelIds: string[]): 
   return out;
 }
 
-export async function fetchMyChannel(accessToken: string): Promise<{ displayName: string | null; avatarUrl: string | null }> {
+/**
+ * The connected account's own channel — TAV-68 uses its id as the stable
+ * user identity (every Google account resolves to exactly one channel here).
+ */
+export async function fetchMyChannel(accessToken: string): Promise<{ channelId: string | null; displayName: string | null; avatarUrl: string | null }> {
   const yt = youtubeClientWithToken(accessToken);
   const res = await yt.channels.list({ part: ['snippet'], mine: true, maxResults: 1 });
   const ch = res.data.items?.[0];
   return {
+    channelId: ch?.id ?? null,
     displayName: ch?.snippet?.title ?? null,
     avatarUrl: ch?.snippet?.thumbnails?.default?.url ?? ch?.snippet?.thumbnails?.medium?.url ?? null,
   };

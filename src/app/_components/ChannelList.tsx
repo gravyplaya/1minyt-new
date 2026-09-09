@@ -8,6 +8,8 @@ import { PageSizeSelect } from './PageSizeSelect';
 import { TagActions } from './TagActions';
 
 interface Props {
+  /** TAV-68: owner of the channel list being queried. */
+  userId: string;
   search: string;
   folderId: string | null;
   tagId: string | null;
@@ -31,8 +33,8 @@ const SORT_OPTIONS = [
   { value: 'updated',     label: 'Recently updated' },
 ] as const;
 
-export async function ChannelList({ search, folderId, tagId, showMusic, showHidden, sort, dir, page, pageSize, folders, tags, urlWith }: Props) {
-  const { channels, total } = await queryChannelsFromParams({
+export async function ChannelList({ userId, search, folderId, tagId, showMusic, showHidden, sort, dir, page, pageSize, folders, tags, urlWith }: Props) {
+  const { channels, total } = await queryChannelsFromParams(userId, {
     q: search,
     folder: folderId,
     tag: tagId,

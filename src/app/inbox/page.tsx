@@ -3,7 +3,7 @@ import { AppShell } from '../_components/AppShell';
 import { InboxFeed } from '../_components/InboxFeed';
 import { FilterSelect } from '../_components/FilterSelect';
 import { listInboxVideos, listInboxCategories, listInboxChannels, INBOX_PAGE_SIZE } from '@/lib/inbox';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser } from '@/lib/auth';
 import { formatCount } from '../_lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -54,20 +54,21 @@ export default async function InboxPage({ searchParams }: PageProps) {
   const page = Math.max(1, parseInt(params.page ?? '1', 10) || 1);
   const offset = (page - 1) * INBOX_PAGE_SIZE;
 
-  const [connected, profile, categories, channels, result] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    listInboxCategories(),
-    listInboxChannels(),
-    listInboxVideos({
-      scope,
-      channelId: channelId && channelId !== 'all' ? channelId : null,
-      categoryId: categoryId != null && Number.isFinite(categoryId) ? categoryId : null,
-      onlyUncaptioned,
-      limit: INBOX_PAGE_SIZE,
-      offset,
-    }),
-  ]);
+  const { user, connected } = await resolvePageUser();
+  const [categories, channels, result] = connected && user
+    ? await Promise.all([
+        listInboxCategories(user.id),
+        listInboxChannels(user.id),
+        listInboxVideos(user.id, {
+          scope,
+          channelId: channelId && channelId !== 'all' ? channelId : null,
+          categoryId: categoryId != null && Number.isFinite(categoryId) ? categoryId : null,
+          onlyUncaptioned,
+          limit: INBOX_PAGE_SIZE,
+          offset,
+        }),
+      ])
+    : [[], [], { videos: [], total: 0 }] as [Array<{ category_id: number; video_count: number }>, Array<{ channel_id: string; channel_title: string; video_count: number }>, { videos: never[]; total: number }];
 
   const totalPages = Math.max(1, Math.ceil(result.total / INBOX_PAGE_SIZE));
 
@@ -95,7 +96,7 @@ export default async function InboxPage({ searchParams }: PageProps) {
   }
 
   return (
-    <AppShell tab="inbox" connected={connected} profile={profile} mainStyle={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="inbox" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📥 Inbox</h1>
         <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>

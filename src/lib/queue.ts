@@ -73,19 +73,19 @@ export type QueueTarget = 'watch' | 'music';
  * Pin a video to the top of the given queue. Idempotent: re-pinning a video
  * already on the queue bumps it to position 0 (most-recently-pinned first).
  */
-export async function pinToQueueTop(videoId: string, queue: QueueTarget): Promise<void> {
+export async function pinToQueueTop(userId: string, videoId: string, queue: QueueTarget): Promise<void> {
   const client = await getDb();
   try {
     const now = Math.floor(Date.now() / 1000);
     // Bump every existing pin on this queue down by one so the new pin can
     // take position 0. Re-pinning an already-pinned video first removes its
     // old row so the position shift doesn't collide with the unique PK.
-    await client.query('UPDATE queue_pins SET position = position + 1 WHERE queue = $1', [queue]);
+    await client.query('UPDATE queue_pins SET position = position + 1 WHERE user_id = $1 AND queue = $2', [userId, queue]);
     await client.query(
-      `INSERT INTO queue_pins (queue, video_id, position, pinned_at, created_at)
-       VALUES ($1, $2, 0, $3, $3)
-       ON CONFLICT (queue, video_id) DO UPDATE SET position = 0, pinned_at = EXCLUDED.pinned_at`,
-      [queue, videoId, now],
+      `INSERT INTO queue_pins (user_id, queue, video_id, position, pinned_at, created_at)
+       VALUES ($1, $2, $3, 0, $4, $4)
+       ON CONFLICT (user_id, queue, video_id) DO UPDATE SET position = 0, pinned_at = EXCLUDED.pinned_at`,
+      [userId, queue, videoId, now],
     );
   } finally {
     client.release();
@@ -101,29 +101,29 @@ export async function pinToQueueTop(videoId: string, queue: QueueTarget): Promis
  * Existing pins on this queue are shifted down by `videoIds.length` to make
  * room. Videos already pinned are re-positioned to their new slot.
  */
-export async function pinMultipleToQueueTop(videoIds: string[], queue: QueueTarget): Promise<void> {
+export async function pinMultipleToQueueTop(userId: string, videoIds: string[], queue: QueueTarget): Promise<void> {
   if (videoIds.length === 0) return;
   const client = await getDb();
   try {
     const now = Math.floor(Date.now() / 1000);
     const n = videoIds.length;
     // Shift existing pins down by n to make room for the new batch at the top.
-    await client.query('UPDATE queue_pins SET position = position + $1 WHERE queue = $2', [n, queue]);
+    await client.query('UPDATE queue_pins SET position = position + $1 WHERE user_id = $2 AND queue = $3', [n, userId, queue]);
     // Remove any of the incoming video_ids that are already pinned on this
     // queue so the INSERT ... ON CONFLICT below re-positions them cleanly
     // without a unique-PK collision mid-batch.
     const placeholders = videoIds.map((_, i) => `$${i + 3}`).join(', ');
     await client.query(
-      `DELETE FROM queue_pins WHERE queue = $1 AND video_id IN (${placeholders})`,
-      [queue, ...videoIds],
+      `DELETE FROM queue_pins WHERE user_id = $1 AND queue = $2 AND video_id IN (${placeholders})`,
+      [userId, queue, ...videoIds],
     );
     // Insert each video at its batch position (0, 1, 2, …).
     for (let i = 0; i < n; i++) {
       await client.query(
-        `INSERT INTO queue_pins (queue, video_id, position, pinned_at, created_at)
-         VALUES ($1, $2, $3, $4, $4)
-         ON CONFLICT (queue, video_id) DO UPDATE SET position = EXCLUDED.position, pinned_at = EXCLUDED.pinned_at`,
-        [queue, videoIds[i], i, now],
+        `INSERT INTO queue_pins (user_id, queue, video_id, position, pinned_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT (user_id, queue, video_id) DO UPDATE SET position = EXCLUDED.position, pinned_at = EXCLUDED.pinned_at`,
+        [userId, queue, videoIds[i], i, now],
       );
     }
   } finally {
@@ -132,22 +132,22 @@ export async function pinMultipleToQueueTop(videoIds: string[], queue: QueueTarg
 }
 
 /** Remove a video's pin from the given queue. No-op if it wasn't pinned. */
-export async function unpinFromQueue(videoId: string, queue: QueueTarget): Promise<void> {
+export async function unpinFromQueue(userId: string, videoId: string, queue: QueueTarget): Promise<void> {
   const client = await getDb();
   try {
-    await client.query('DELETE FROM queue_pins WHERE queue = $1 AND video_id = $2', [queue, videoId]);
+    await client.query('DELETE FROM queue_pins WHERE user_id = $1 AND queue = $2 AND video_id = $3', [userId, queue, videoId]);
   } finally {
     client.release();
   }
 }
 
 /** Return the pinned video ids for a queue, ordered by pin position (top first). */
-export async function listPinnedVideoIds(queue: QueueTarget): Promise<string[]> {
+export async function listPinnedVideoIds(userId: string, queue: QueueTarget): Promise<string[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ video_id: string }>(
-      'SELECT video_id FROM queue_pins WHERE queue = $1 ORDER BY position ASC, pinned_at DESC',
-      [queue],
+      'SELECT video_id FROM queue_pins WHERE user_id = $1 AND queue = $2 ORDER BY position ASC, pinned_at DESC',
+      [userId, queue],
     );
     return rows.map(r => r.video_id);
   } finally {
@@ -165,7 +165,7 @@ export async function listPinnedVideoIds(queue: QueueTarget): Promise<string[]> 
  * channel on the Watch queue (or vice versa) — the same excludes the build
  * query applies to ranked candidates.
  */
-async function getPinnedWatchItems(): Promise<WatchQueueItem[]> {
+async function getPinnedWatchItems(userId: string): Promise<WatchQueueItem[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -179,14 +179,15 @@ async function getPinnedWatchItems(): Promise<WatchQueueItem[]> {
       `SELECT v.video_id, v.title, c.title AS channel_title,
               v.thumbnail_url, v.duration_seconds, v.published_at
        FROM queue_pins qp
-       JOIN videos v ON v.video_id = qp.video_id
-       JOIN channels c ON c.channel_id = v.channel_id
-       WHERE qp.queue = 'watch'
+       JOIN videos v ON v.user_id = qp.user_id AND v.video_id = qp.video_id
+       JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+       WHERE qp.user_id = $1
+         AND qp.queue = 'watch'
          AND c.hidden = 0
          AND c.music_flag <> 1
          AND v.is_live = 0
        ORDER BY qp.position ASC, qp.pinned_at DESC`,
-      [],
+      [userId],
     );
     return rows.map(r => ({
       video_id: r.video_id,
@@ -205,7 +206,7 @@ async function getPinnedWatchItems(): Promise<WatchQueueItem[]> {
 }
 
 /** Hydrated pinned items for the Music queue, mirroring getPinnedWatchItems. */
-async function getPinnedMusicItems(): Promise<MusicQueueItem[]> {
+async function getPinnedMusicItems(userId: string): Promise<MusicQueueItem[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -223,14 +224,15 @@ async function getPinnedMusicItems(): Promise<MusicQueueItem[]> {
               v.thumbnail_url, v.duration_seconds, v.published_at,
               v.tags, v.category_id, v.video_pref
        FROM queue_pins qp
-       JOIN videos v ON v.video_id = qp.video_id
-       JOIN channels c ON c.channel_id = v.channel_id
-       WHERE qp.queue = 'music'
+       JOIN videos v ON v.user_id = qp.user_id AND v.video_id = qp.video_id
+       JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+       WHERE qp.user_id = $1
+         AND qp.queue = 'music'
          AND c.hidden = 0
          AND c.music_flag = 1
          AND v.is_live = 0
        ORDER BY qp.position ASC, qp.pinned_at DESC`,
-      [],
+      [userId],
     );
     return rows.map(r => {
       const presentation = computeMusicVideoPresentation({
@@ -275,6 +277,7 @@ const TOP_N_TOPICS = 15;
  * @param offset row offset for pagination (clamped ≥ 0)
  */
 export async function buildWatchQueue(
+  userId: string,
   limit: number = WATCH_QUEUE_PAGE_SIZE,
   offset: number = 0,
 ): Promise<WatchQueueItem[]> {
@@ -304,7 +307,7 @@ export async function buildWatchQueue(
              LATERAL jsonb_array_elements_text(
                COALESCE(s.topics::jsonb, '[]'::jsonb)
              ) AS topic
-        WHERE s.topics IS NOT NULL
+        WHERE s.user_id = $1 AND s.topics IS NOT NULL
         GROUP BY LOWER(topic)
         ORDER BY COUNT(*) DESC
         LIMIT ${TOP_N_TOPICS}
@@ -317,6 +320,7 @@ export async function buildWatchQueue(
         FROM summaries s,
              LATERAL jsonb_array_elements_text(COALESCE(s.topics::jsonb, '[]'::jsonb)) AS cand_topic
         JOIN user_topics ut ON ut.topic = LOWER(cand_topic)
+        WHERE s.user_id = $1
         GROUP BY s.video_id
       ),
       -- reference_graph: count how many of the user's saved/summarized videos
@@ -325,8 +329,8 @@ export async function buildWatchQueue(
       reference_graph AS (
         SELECT r.target_video_id AS video_id, COUNT(DISTINCT r.source_video_id) AS ref_count
         FROM video_references r
-        JOIN summaries sm ON sm.video_id = r.source_video_id
-        WHERE r.target_video_id IS NOT NULL
+        JOIN summaries sm ON sm.user_id = r.user_id AND sm.video_id = r.source_video_id
+        WHERE r.user_id = $1 AND r.target_video_id IS NOT NULL
         GROUP BY r.target_video_id
       ),
       -- channel_affinity: summaries + likes per channel, capped at 5 so one
@@ -336,8 +340,9 @@ export async function buildWatchQueue(
         SELECT v.channel_id,
                LEAST(COUNT(DISTINCT s.id) + COUNT(DISTINCT vl.video_id), 5) AS affinity
         FROM videos v
-        LEFT JOIN summaries s ON s.video_id = v.video_id
-        LEFT JOIN video_likes vl ON vl.video_id = v.video_id
+        LEFT JOIN summaries s ON s.user_id = v.user_id AND s.video_id = v.video_id
+        LEFT JOIN video_likes vl ON vl.user_id = v.user_id AND vl.video_id = v.video_id
+        WHERE v.user_id = $1
         GROUP BY v.channel_id
       ),
       scored AS (
@@ -386,13 +391,14 @@ export async function buildWatchQueue(
           COALESCE(rg.ref_count, 0) AS ref_count
 
         FROM videos v
-        JOIN channels c ON c.channel_id = v.channel_id
-        LEFT JOIN video_states vs ON vs.video_id = v.video_id
-        LEFT JOIN video_play_history ph ON ph.video_id = v.video_id
+        JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+        LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
+        LEFT JOIN video_play_history ph ON ph.user_id = v.user_id AND ph.video_id = v.video_id
         LEFT JOIN topic_match tm ON tm.video_id = v.video_id
         LEFT JOIN reference_graph rg ON rg.video_id = v.video_id
         LEFT JOIN channel_affinity ca ON ca.channel_id = v.channel_id
-        WHERE c.hidden = 0
+        WHERE v.user_id = $1
+          AND c.hidden = 0
           AND c.music_flag <> 1
           AND v.is_live = 0
           AND (vs.state IS NULL OR vs.state <> 'seen')
@@ -421,7 +427,7 @@ export async function buildWatchQueue(
       FROM scored
       ORDER BY raw_score DESC NULLS LAST
       LIMIT ${lim} OFFSET ${off}`,
-      [],
+      [userId],
     );
 
     // Normalise raw score to 0–1 against the page max, same as listInboxVideos.
@@ -442,7 +448,7 @@ export async function buildWatchQueue(
     }));
 
     // TAV-61: prepend pinned videos so they survive the force-dynamic re-fetch.
-    return withPinnedWatch(ranked, lim);
+    return withPinnedWatch(userId, ranked, lim);
   } finally {
     client.release();
   }
@@ -455,10 +461,11 @@ export async function buildWatchQueue(
  * results are moved to the front. The combined list is truncated to `limit`.
  */
 async function withPinnedWatch(
+  userId: string,
   ranked: WatchQueueItem[],
   limit: number,
 ): Promise<WatchQueueItem[]> {
-  const pinned = await getPinnedWatchItems();
+  const pinned = await getPinnedWatchItems(userId);
   if (pinned.length === 0) return ranked;
 
   const rankedIds = new Set(ranked.map(r => r.video_id));
@@ -523,6 +530,7 @@ export const MUSIC_QUEUE_PAGE_SIZE = 30;
  * @param offset row offset for pagination (clamped ≥ 0)
  */
 export async function buildMusicQueue(
+  userId: string,
   limit: number = MUSIC_QUEUE_PAGE_SIZE,
   offset: number = 0,
 ): Promise<MusicQueueItem[]> {
@@ -554,8 +562,9 @@ export async function buildMusicQueue(
         SELECT v.channel_id,
                LEAST(COUNT(DISTINCT ph.video_id) + COUNT(DISTINCT vl.video_id), 5) AS affinity
         FROM videos v
-        LEFT JOIN video_play_history ph ON ph.video_id = v.video_id
-        LEFT JOIN video_likes vl ON vl.video_id = v.video_id
+        LEFT JOIN video_play_history ph ON ph.user_id = v.user_id AND ph.video_id = v.video_id
+        LEFT JOIN video_likes vl ON vl.user_id = v.user_id AND vl.video_id = v.video_id
+        WHERE v.user_id = $1
         GROUP BY v.channel_id
       ),
       scored AS (
@@ -590,11 +599,12 @@ export async function buildMusicQueue(
           (LN(GREATEST(COALESCE(v.view_count, 1), 1)) + LN(COALESCE(v.like_count, 0) + 1)) AS engagement
 
         FROM videos v
-        JOIN channels c ON c.channel_id = v.channel_id
-        LEFT JOIN video_states vs ON vs.video_id = v.video_id
-        LEFT JOIN video_play_history ph ON ph.video_id = v.video_id
+        JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+        LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
+        LEFT JOIN video_play_history ph ON ph.user_id = v.user_id AND ph.video_id = v.video_id
         LEFT JOIN channel_affinity ca ON ca.channel_id = v.channel_id
-        WHERE c.hidden = 0
+        WHERE v.user_id = $1
+          AND c.hidden = 0
           AND c.music_flag = 1
           AND v.is_live = 0
           AND (vs.state IS NULL OR vs.state <> 'seen')
@@ -612,7 +622,7 @@ export async function buildMusicQueue(
       FROM scored
       ORDER BY raw_score DESC NULLS LAST
       LIMIT ${lim} OFFSET ${off}`,
-      [],
+      [userId],
     );
 
     // Normalise raw score to 0–1 against the page max, same as buildWatchQueue.
@@ -643,7 +653,7 @@ export async function buildMusicQueue(
     });
 
     // TAV-61: prepend pinned tracks so they survive the force-dynamic re-fetch.
-    return withPinnedMusic(ranked, lim);
+    return withPinnedMusic(userId, ranked, lim);
   } finally {
     client.release();
   }
@@ -655,10 +665,11 @@ export async function buildMusicQueue(
  * dedupe + truncate logic.
  */
 async function withPinnedMusic(
+  userId: string,
   ranked: MusicQueueItem[],
   limit: number,
 ): Promise<MusicQueueItem[]> {
-  const pinned = await getPinnedMusicItems();
+  const pinned = await getPinnedMusicItems(userId);
   if (pinned.length === 0) return ranked;
 
   const rankedIds = new Set(ranked.map(r => r.video_id));
@@ -687,7 +698,7 @@ async function withPinnedMusic(
  * /music to resolve a `?v=` param naming a track outside the ranked queue
  * page (e.g. clicked from the library section).
  */
-export async function listMusicLibrary(): Promise<MusicLibraryGroup[]> {
+export async function listMusicLibrary(userId: string): Promise<MusicLibraryGroup[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<MusicLibraryTrack>(
@@ -696,13 +707,14 @@ export async function listMusicLibrary(): Promise<MusicLibraryGroup[]> {
              v.published_at, c.title AS channel_title,
              COALESCE(vs.state = 'seen', FALSE) AS is_seen
       FROM videos v
-      JOIN channels c ON c.channel_id = v.channel_id
-      LEFT JOIN video_states vs ON vs.video_id = v.video_id
-      WHERE c.hidden = 0
+      JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+      LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
+      WHERE v.user_id = $1
+        AND c.hidden = 0
         AND c.music_flag = 1
         AND v.is_live = 0
       ORDER BY LOWER(c.title) ASC, v.published_at DESC NULLS LAST`,
-      [],
+      [userId],
     );
 
     // Rows arrive pre-sorted (artist A–Z, then newest first), so grouping is

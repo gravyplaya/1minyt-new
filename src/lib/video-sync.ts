@@ -42,16 +42,16 @@ export interface VideoSyncResult {
  * API fallback path (used when RSS returns null — feed down, parse empty, etc.):
  *   - The original `fetchChannelUploads` + `fetchVideoDetails` flow, unchanged.
  */
-export async function syncChannelVideos(channelId: string, max = 30): Promise<VideoSyncResult> {
+export async function syncChannelVideos(userId: string, channelId: string, max = 30): Promise<VideoSyncResult> {
   const result: VideoSyncResult = { channelId, fetched: 0, errors: [], rss: false };
-  const channel = await getChannel(channelId);
+  const channel = await getChannel(userId, channelId);
   if (!channel) {
     result.errors.push('Channel not found in local DB');
     return result;
   }
 
   try {
-    const accessToken = await getValidAccessToken();
+    const accessToken = await getValidAccessToken(userId);
 
     // 1. Try the free RSS feed for new-video detection.
     const rssEntries = await fetchChannelUploadsRss(channelId, Math.min(max, 15));
@@ -60,14 +60,14 @@ export async function syncChannelVideos(channelId: string, max = 30): Promise<Vi
       result.fetched = rssEntries.length;
 
       // Snapshot the ids we already have so we only pay for enrichment on new ones.
-      const existingIds = await listVideoIdsByChannel(channelId);
+      const existingIds = await listVideoIdsByChannel(userId, channelId);
       const newEntries = rssEntries.filter(e => !existingIds.has(e.videoId));
 
       // Write a baseline row for every feed entry first — this makes new videos
       // visible in the UI immediately, and refreshes title/description/thumbnail
       // for existing ones (RSS is a fine source for those fields).
       for (const entry of rssEntries) {
-        await upsertVideo({
+        await upsertVideo(userId, {
           video_id: entry.videoId,
           channel_id: channelId,
           title: entry.title || '(untitled)',
@@ -101,7 +101,7 @@ export async function syncChannelVideos(channelId: string, max = 30): Promise<Vi
         const snip = det.snippet;
         if (!snip) continue;
 
-        await upsertVideo({
+        await upsertVideo(userId, {
           video_id: entry.videoId,
           channel_id: channelId,
           title: snip.title ?? entry.title,
@@ -145,7 +145,7 @@ export async function syncChannelVideos(channelId: string, max = 30): Promise<Vi
       const snip = det?.snippet ?? item.snippet;
       if (!snip) continue;
 
-      await upsertVideo({
+      await upsertVideo(userId, {
         video_id: videoId,
         channel_id: channelId,
         title: snip.title ?? '(untitled)',

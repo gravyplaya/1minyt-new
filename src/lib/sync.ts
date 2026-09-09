@@ -37,11 +37,11 @@ export interface SyncResult {
   errors: string[];
 }
 
-export async function syncSubscriptions(): Promise<SyncResult> {
-  const runId = await recordSyncStart();
+export async function syncSubscriptions(userId: string): Promise<SyncResult> {
+  const runId = await recordSyncStart(userId);
   const result: SyncResult = { seen: 0, new: 0, updated: 0, likesSynced: 0, likesInserted: 0, videosSynced: 0, videosInserted: 0, errors: [] };
   try {
-    const accessToken = await getValidAccessToken();
+    const accessToken = await getValidAccessToken(userId);
     const yt = youtubeClientWithToken(accessToken);
 
     // --- Pipelined subscription fetch + channel detail fetch ----------------
@@ -50,7 +50,7 @@ export async function syncSubscriptions(): Promise<SyncResult> {
     // page arrives — those API calls run in parallel while the next subscription
     // page is being fetched. We also skip channel details for channels synced
     // within SYNC_SKIP_SECONDS to save API quota on repeat syncs.
-    const recentlySynced = await listRecentlySyncedChannelIds(SYNC_SKIP_SECONDS);
+    const recentlySynced = await listRecentlySyncedChannelIds(userId, SYNC_SKIP_SECONDS);
 
     const allSubs: youtube_v3.Schema$Subscription[] = [];
     const channelDetailPromises: Promise<youtube_v3.Schema$Channel[]>[] = [];
@@ -128,7 +128,7 @@ export async function syncSubscriptions(): Promise<SyncResult> {
     }).filter(r => r.channel_id !== '');
 
     // --- Batch upsert: single query instead of N×(SELECT+INSERT/UPDATE) ------
-    const { created, updated } = await upsertChannels(rows);
+    const { created, updated } = await upsertChannels(userId, rows);
     result.new = created;
     result.updated = updated;
 
@@ -144,7 +144,7 @@ export async function syncSubscriptions(): Promise<SyncResult> {
       const rssEntries = await fetchAllRssFeeds(channelIds, RSS_CONCURRENCY);
       result.videosSynced = rssEntries.length;
       if (rssEntries.length > 0) {
-        const { inserted } = await upsertVideosFromRss(rssEntries);
+        const { inserted } = await upsertVideosFromRss(userId, rssEntries);
         result.videosInserted = inserted;
       }
     } catch (err) {
@@ -162,6 +162,7 @@ export async function syncSubscriptions(): Promise<SyncResult> {
       if (likes.length > 0) {
         const likedAt = Math.floor(Date.now() / 1000);
         const { inserted, skipped } = await recordLikedVideos(
+          userId,
           likes.map(v => ({
             video_id: v.video_id,
             channel_id: v.channel_id,

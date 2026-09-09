@@ -1,6 +1,7 @@
 /**
  * TAV-68a: Cross-video transcript search — GET /api/extension/search?q=<query>
- * Auth: `Authorization: Bearer <EXTENSION_API_KEY>`.
+ * Auth: `Authorization: Bearer <EXTENSION_API_KEY>` + the app session cookie
+ * (TAV-68) — results come from the signed-in user's library.
  *
  * Wraps the TAV-10 index (`searchTranscriptsAction` → vector-store
  * `searchAcross`) so the extension popup can search the library from anywhere.
@@ -8,13 +9,21 @@
  */
 
 import { searchTranscriptsAction } from '@/app/actions';
-import { extensionJson, extensionPreflight, guardExtensionRequest } from '@/lib/extension-api';
+import {
+  extensionJson,
+  extensionPreflight,
+  guardExtensionRequest,
+  requireExtensionUser,
+} from '@/lib/extension-api';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
   const denied = guardExtensionRequest(req);
   if (denied) return denied;
+
+  const { denied: noSession } = await requireExtensionUser(req);
+  if (noSession) return noSession;
 
   const q = new URL(req.url).searchParams.get('q') ?? '';
   try {

@@ -6,21 +6,25 @@
  * need the Next.js client runtime). These helpers give every extension route a
  * uniform contract instead of each one re-rolling it:
  *
- *  - Auth: a single shared secret. `EXTENSION_API_KEY` on the server, sent by
- *    the extension as `Authorization: Bearer <key>`. No key configured = the
- *    whole surface is off (503); wrong key = 401. This is a single-user app —
- *    the key just gates programmatic access. Upgrade to per-device tokens if
- *    that ever changes.
+ *  - Auth: two layers. `EXTENSION_API_KEY` on the server, sent by the extension
+ *    as `Authorization: Bearer <key>`, gates the whole surface (no key
+ *    configured = 503, wrong key = 401). User identity then comes from the
+ *    app's own session cookie (TAV-68): the extension runs in the same browser
+ *    as the app and sends its credentials, so `requireExtensionUser` resolves
+ *    the signed-in user every data route scopes its queries by. Signed-out
+ *    callers get a friendly 401 JSON — never a redirect.
  *  - CORS: MV3 service workers with the app origin in host_permissions bypass
  *    CORS entirely, so these headers are belt-and-braces (they also keep
  *    curl / fetch dev tooling honest). Only chrome-extension:// origins are
- *    reflected.
+ *    reflected, and always with credentials so the session cookie survives a
+ *    CORS-checked request (no host permission granted).
  *  - Responses: the app-wide `{ ok, ...data }` / `{ ok: false, error }` shape
  *    the server-action outcomes already use.
  */
 
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
+import { getSessionUser, type SessionUser } from './auth';
 import { parseYouTubeUrl } from './youtube-url';
 import type { FollowUp, SummaryRow } from './types';
 
@@ -39,6 +43,7 @@ function extensionCorsHeaders(req: Request): Record<string, string> {
   const headers: Record<string, string> = { Vary: 'Origin' };
   if (origin.startsWith('chrome-extension://')) {
     headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
     headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
     headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type';
     headers['Access-Control-Max-Age'] = '86400';
@@ -64,6 +69,33 @@ export function guardExtensionRequest(req: Request): NextResponse | null {
     return extensionJson(req, { ok: false, error: 'Invalid or missing API key.' }, 401);
   }
   return null;
+}
+
+/**
+ * TAV-68: resolve which user an extension request acts as. The key gate above
+ * authenticates the *extension*; this authenticates the *person* — the app
+ * session cookie sent along with the request (the extension passes
+ * credentials). Returns the signed-in user plus `denied: null`, or
+ * `user: null` plus a ready-to-send 401 response when there is no session, so
+ * data routes never leak into the __anon bucket or trigger requireUserId's
+ * redirect from a route handler. Caller shape matches guardExtensionRequest:
+ * `const { user, denied } = await requireExtensionUser(req); if (denied) return denied;`
+ */
+export async function requireExtensionUser(
+  req: Request,
+): Promise<{ user: SessionUser; denied: null } | { user: null; denied: NextResponse }> {
+  const user = await getSessionUser();
+  if (!user) {
+    return {
+      user: null,
+      denied: extensionJson(
+        req,
+        { ok: false, error: 'Not signed in — open the app in this browser and sign in, then try again.' },
+        401,
+      ),
+    };
+  }
+  return { user, denied: null };
 }
 
 /** Constant-time compare; a length mismatch fails fast (length isn't secret). */

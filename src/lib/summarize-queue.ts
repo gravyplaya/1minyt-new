@@ -9,6 +9,8 @@
  *
  * Re-queuing an already-summarized video flips it back to 'queued' so the
  * user can re-run the batch. Removing from the queue deletes the row.
+ *
+ * TAV-68: queue rows are per-user; every function takes the owner's user id.
  */
 
 import { getDb } from './db';
@@ -20,19 +22,19 @@ import type { QueueState, SummarizeQueueItem } from './types';
  * (in any state), reset it to 'queued' and bump queued_at — this makes the
  * action idempotent and lets users re-queue a summarized video for a re-run.
  */
-export async function enqueueForSummary(videoId: string): Promise<void> {
+export async function enqueueForSummary(userId: string, videoId: string): Promise<void> {
   const client = await getDb();
   try {
     const now = Math.floor(Date.now() / 1000);
     const id = newId();
     await client.query(
-      `INSERT INTO summarize_queue (id, video_id, state, queued_at, summarized_at, created_at)
-       VALUES ($1, $2, 'queued', $3, NULL, $3)
-       ON CONFLICT (video_id) DO UPDATE SET
+      `INSERT INTO summarize_queue (id, user_id, video_id, state, queued_at, summarized_at, created_at)
+       VALUES ($1, $2, $3, 'queued', $4, NULL, $4)
+       ON CONFLICT (user_id, video_id) DO UPDATE SET
         state = 'queued',
         queued_at = excluded.queued_at,
         summarized_at = NULL`,
-      [id, videoId, now],
+      [id, userId, videoId, now],
     );
   } finally {
     client.release();
@@ -44,10 +46,10 @@ export async function enqueueForSummary(videoId: string): Promise<void> {
  * user explicitly removes an item (distinct from "summarized", which keeps
  * the row with a badge).
  */
-export async function removeFromQueue(videoId: string): Promise<void> {
+export async function removeFromQueue(userId: string, videoId: string): Promise<void> {
   const client = await getDb();
   try {
-    await client.query('DELETE FROM summarize_queue WHERE video_id = $1', [videoId]);
+    await client.query('DELETE FROM summarize_queue WHERE user_id = $1 AND video_id = $2', [userId, videoId]);
   } finally {
     client.release();
   }
@@ -58,13 +60,13 @@ export async function removeFromQueue(videoId: string): Promise<void> {
  * generates a summary for the video. Keeps the row so the user sees what was
  * processed; `summarized_at` is the completion timestamp.
  */
-export async function markQueueItemSummarized(videoId: string): Promise<void> {
+export async function markQueueItemSummarized(userId: string, videoId: string): Promise<void> {
   const client = await getDb();
   try {
     const now = Math.floor(Date.now() / 1000);
     await client.query(
-      `UPDATE summarize_queue SET state = 'summarized', summarized_at = $1 WHERE video_id = $2`,
-      [now, videoId],
+      `UPDATE summarize_queue SET state = 'summarized', summarized_at = $1 WHERE user_id = $2 AND video_id = $3`,
+      [now, userId, videoId],
     );
   } finally {
     client.release();
@@ -76,14 +78,14 @@ export async function markQueueItemSummarized(videoId: string): Promise<void> {
  * Queued items first (newest first), then summarized items (most recently
  * summarized first). Each row is joined with video + channel details.
  */
-export async function listQueueItems(state?: QueueState): Promise<SummarizeQueueItem[]> {
+export async function listQueueItems(userId: string, state?: QueueState): Promise<SummarizeQueueItem[]> {
   const client = await getDb();
   try {
-    const params: unknown[] = [];
-    let whereState = '';
+    const params: unknown[] = [userId];
+    let whereState = 'WHERE sq.user_id = $1';
     if (state) {
       params.push(state);
-      whereState = `WHERE sq.state = $1`;
+      whereState += ` AND sq.state = $2`;
     }
     const { rows } = await client.query<{
       id: string;
@@ -105,10 +107,10 @@ export async function listQueueItems(state?: QueueState): Promise<SummarizeQueue
          sq.id, sq.video_id, sq.state AS q_state, sq.queued_at, sq.summarized_at, sq.created_at,
          v.title, v.thumbnail_url, v.duration_seconds, v.published_at,
          v.channel_id, c.title AS channel_title, v.transcript_status,
-         (SELECT COUNT(*) FROM summaries s WHERE s.video_id = v.video_id) AS summary_count
+         (SELECT COUNT(*) FROM summaries s WHERE s.user_id = v.user_id AND s.video_id = v.video_id) AS summary_count
        FROM summarize_queue sq
-       JOIN videos v ON v.video_id = sq.video_id
-       JOIN channels c ON c.channel_id = v.channel_id
+       JOIN videos v ON v.user_id = sq.user_id AND v.video_id = sq.video_id
+       JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
        ${whereState}
        ORDER BY
          CASE sq.state WHEN 'queued' THEN 0 ELSE 1 END,
@@ -141,11 +143,12 @@ export async function listQueueItems(state?: QueueState): Promise<SummarizeQueue
  * List just the video_ids of items currently in 'queued' state. Used by the
  * batch summarize action to know which videos to process.
  */
-export async function listQueuedVideoIds(): Promise<string[]> {
+export async function listQueuedVideoIds(userId: string): Promise<string[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ video_id: string }>(
-      `SELECT video_id FROM summarize_queue WHERE state = 'queued' ORDER BY queued_at DESC`,
+      `SELECT video_id FROM summarize_queue WHERE user_id = $1 AND state = 'queued' ORDER BY queued_at DESC`,
+      [userId],
     );
     return rows.map(r => r.video_id);
   } finally {
@@ -154,10 +157,13 @@ export async function listQueuedVideoIds(): Promise<string[]> {
 }
 
 /** Count of items in 'queued' state — for the nav badge. */
-export async function countQueued(): Promise<number> {
+export async function countQueued(userId: string): Promise<number> {
   const client = await getDb();
   try {
-    const { rows } = await client.query(`SELECT COUNT(*) AS n FROM summarize_queue WHERE state = 'queued'`);
+    const { rows } = await client.query(
+      `SELECT COUNT(*) AS n FROM summarize_queue WHERE user_id = $1 AND state = 'queued'`,
+      [userId],
+    );
     return Number(rows[0].n);
   } finally {
     client.release();
@@ -168,12 +174,12 @@ export async function countQueued(): Promise<number> {
  * Check whether a video is currently in the queue (any state). Used by UI
  * components to show the correct "added to queue" state on the button.
  */
-export async function isQueued(videoId: string): Promise<boolean> {
+export async function isQueued(userId: string, videoId: string): Promise<boolean> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ id: string }>(
-      'SELECT id FROM summarize_queue WHERE video_id = $1',
-      [videoId],
+      'SELECT id FROM summarize_queue WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
     );
     return rows.length > 0;
   } finally {
@@ -186,14 +192,14 @@ export async function isQueued(videoId: string): Promise<boolean> {
  * ids that are currently queued (any state). Used by list views to mark
  * which videos are already in the queue without N+1 queries.
  */
-export async function queuedVideoIds(videoIds: string[]): Promise<Set<string>> {
+export async function queuedVideoIds(userId: string, videoIds: string[]): Promise<Set<string>> {
   if (videoIds.length === 0) return new Set();
   const client = await getDb();
   try {
-    const placeholders = videoIds.map((_, i) => `$${i + 1}`).join(',');
+    const placeholders = videoIds.map((_, i) => `$${i + 2}`).join(',');
     const { rows } = await client.query<{ video_id: string }>(
-      `SELECT video_id FROM summarize_queue WHERE video_id IN (${placeholders})`,
-      videoIds,
+      `SELECT video_id FROM summarize_queue WHERE user_id = $1 AND video_id IN (${placeholders})`,
+      [userId, ...videoIds],
     );
     return new Set(rows.map(r => r.video_id));
   } finally {

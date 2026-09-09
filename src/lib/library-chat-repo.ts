@@ -2,6 +2,8 @@
  * Data access for the /chat surface (TAV-63/64/65):
  *  - library_chat_messages — per-scope conversation threads
  *  - channel_dossiers      — per-channel LLM "memory" (see dossier.ts)
+ *
+ * TAV-68: threads and dossiers are per-user rows; every query is scoped.
  */
 
 import { getDb } from './db';
@@ -10,7 +12,7 @@ import type { ChannelDossier, LibraryChatMessage } from './types';
 
 // ----- library chat messages ---------------------------------------------------
 
-export async function saveLibraryChatMessage(input: {
+export async function saveLibraryChatMessage(userId: string, input: {
   scope: string;
   role: 'user' | 'assistant';
   content: string;
@@ -21,8 +23,8 @@ export async function saveLibraryChatMessage(input: {
     const now = Math.floor(Date.now() / 1000);
     const id = newId();
     await client.query(
-      'INSERT INTO library_chat_messages (id, scope, role, content, tool_trace, created_at) VALUES ($1, $2, $3, $4, $5, $6)',
-      [id, input.scope, input.role, input.content, input.toolTrace ?? null, now],
+      'INSERT INTO library_chat_messages (id, user_id, scope, role, content, tool_trace, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [id, userId, input.scope, input.role, input.content, input.toolTrace ?? null, now],
     );
     return {
       id,
@@ -37,12 +39,12 @@ export async function saveLibraryChatMessage(input: {
   }
 }
 
-export async function listLibraryChatMessages(scope: string, limit = 50): Promise<LibraryChatMessage[]> {
+export async function listLibraryChatMessages(userId: string, scope: string, limit = 50): Promise<LibraryChatMessage[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query(
-      'SELECT * FROM library_chat_messages WHERE scope = $1 ORDER BY created_at ASC, id ASC LIMIT $2',
-      [scope, limit],
+      'SELECT * FROM library_chat_messages WHERE user_id = $1 AND scope = $2 ORDER BY created_at ASC, id ASC LIMIT $3',
+      [userId, scope, limit],
     );
     return rows.map((r: { id: string; scope: string; role: string; content: string; tool_trace: string | null; created_at: number }) => ({
       id: r.id,
@@ -58,10 +60,10 @@ export async function listLibraryChatMessages(scope: string, limit = 50): Promis
 }
 
 /** Clear one scope's thread (used by the "Clear chat" button). */
-export async function clearLibraryChat(scope: string): Promise<void> {
+export async function clearLibraryChat(userId: string, scope: string): Promise<void> {
   const client = await getDb();
   try {
-    await client.query('DELETE FROM library_chat_messages WHERE scope = $1', [scope]);
+    await client.query('DELETE FROM library_chat_messages WHERE user_id = $1 AND scope = $2', [userId, scope]);
   } finally {
     client.release();
   }
@@ -69,7 +71,7 @@ export async function clearLibraryChat(scope: string): Promise<void> {
 
 // ----- channel dossiers ---------------------------------------------------------
 
-export async function saveDossier(input: {
+export async function saveDossier(userId: string, input: {
   channel_id: string;
   model: string;
   dossier: string;
@@ -81,28 +83,28 @@ export async function saveDossier(input: {
   try {
     const now = Math.floor(Date.now() / 1000);
     await client.query(
-      `INSERT INTO channel_dossiers (channel_id, model, dossier, themes, video_count, token_count, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-       ON CONFLICT (channel_id) DO UPDATE SET
+      `INSERT INTO channel_dossiers (user_id, channel_id, model, dossier, themes, video_count, token_count, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+       ON CONFLICT (user_id, channel_id) DO UPDATE SET
          model = excluded.model,
          dossier = excluded.dossier,
          themes = excluded.themes,
          video_count = excluded.video_count,
          token_count = excluded.token_count,
          updated_at = excluded.updated_at`,
-      [input.channel_id, input.model, input.dossier, JSON.stringify(input.themes), input.video_count, input.token_count, now],
+      [userId, input.channel_id, input.model, input.dossier, JSON.stringify(input.themes), input.video_count, input.token_count, now],
     );
   } finally {
     client.release();
   }
 }
 
-export async function getDossier(channelId: string): Promise<ChannelDossier | null> {
+export async function getDossier(userId: string, channelId: string): Promise<ChannelDossier | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query(
-      'SELECT * FROM channel_dossiers WHERE channel_id = $1',
-      [channelId],
+      'SELECT * FROM channel_dossiers WHERE user_id = $1 AND channel_id = $2',
+      [userId, channelId],
     );
     if (rows.length === 0) return null;
     const r = rows[0] as { channel_id: string; model: string; dossier: string; themes: string; video_count: number; token_count: number | null; created_at: number; updated_at: number };

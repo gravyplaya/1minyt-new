@@ -20,10 +20,10 @@ const railHeading: React.CSSProperties = {
 
 export type LibraryCollection = 'saved' | 'liked' | 'history' | 'summarized' | 'summarize-later' | 'metrics' | 'chat' | 'topics';
 
-export async function LibraryRail({ active }: { active: LibraryCollection }) {
+export async function LibraryRail({ active, userId }: { active: LibraryCollection; userId: string }) {
   const [summarizedCount, queuedCount] = await Promise.all([
-    countSummarizedVideos(),
-    countQueued(),
+    countSummarizedVideos(userId),
+    countQueued(userId),
   ]);
 
   const items: Array<{ id: LibraryCollection; label: string; icon: string; href: string; badge?: number }> = [

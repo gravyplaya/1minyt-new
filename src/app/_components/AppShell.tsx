@@ -35,6 +35,7 @@ export async function AppShell({
   children,
   tab,
   connected,
+  userId,
   profile,
   lastSync,
   mainStyle,
@@ -54,6 +55,8 @@ export async function AppShell({
   children: React.ReactNode;
   tab: TabId;
   connected: boolean;
+  /** TAV-68: session user id — scoped badge/rail queries. Null when signed out. */
+  userId?: string | null;
   profile?: UserProfile | null;
   lastSync?: number | null;
   mainStyle?: React.CSSProperties;
@@ -78,12 +81,12 @@ export async function AppShell({
   // Fetch badge counts for the tab bar. Only run when connected — the TabBar
   // is only rendered when connected, and the Watch/Music queue builders are
   // multi-CTE ranking queries we don't want to pay for on the disconnected
-  // landing page.
-  const badgeProps = connected ? await getBadgeCounts() : null;
+  // landing page. TAV-68: counts are scoped to the session user.
+  const badgeProps = connected && userId ? await getBadgeCounts(userId) : null;
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} profile={profile} lastSync={lastSync} />
+      <HeaderBar connected={connected} signedIn={Boolean(userId)} profile={profile} lastSync={lastSync} />
       {connected && badgeProps && (
         <TabBar
           active={tab}
@@ -106,6 +109,7 @@ export async function AppShell({
           <div className="rail-container" style={{ borderRight: '1px solid #2a2a33', background: '#0e0e12', overflow: 'auto' }}>
             {tab === 'channels' && (
               <ChannelRail
+                userId={userId ?? ''}
                 activeFolder={activeFolder}
                 activeTag={activeTag}
                 showMusic={showMusic}
@@ -114,7 +118,7 @@ export async function AppShell({
               />
             )}
             {tab === 'library' && libraryActive && (
-              <LibraryRail active={libraryActive} />
+              <LibraryRail active={libraryActive} userId={userId ?? ''} />
             )}
             {tab === 'settings' && settingsActive && (
               <SettingsRail active={settingsActive} />
@@ -143,7 +147,7 @@ export async function AppShell({
  * surface (capped at the limit). This is intentionally a row count, not a
  * full `COUNT(*)`, to bound the cost of the multi-CTE ranking queries.
  */
-async function getBadgeCounts(): Promise<{
+async function getBadgeCounts(userId: string): Promise<{
   inboxCount: number;
   libraryCount: number;
   channelCount: number;
@@ -156,11 +160,11 @@ async function getBadgeCounts(): Promise<{
   const { buildWatchQueue, buildMusicQueue } = await import('@/lib/queue');
 
   const [inboxCount, libraryCount, channelCount, watchQueue, musicQueue] = await Promise.all([
-    countInboxNew(),
-    countQueued(),
-    countChannels(),
-    buildWatchQueue(50),
-    buildMusicQueue(50),
+    countInboxNew(userId),
+    countQueued(userId),
+    countChannels(userId),
+    buildWatchQueue(userId, 50),
+    buildMusicQueue(userId, 50),
   ]);
 
   return {

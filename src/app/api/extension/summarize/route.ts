@@ -1,6 +1,8 @@
 /**
  * TAV-68a: Save + summarize in one shot — POST /api/extension/summarize
- * Body: `{ url }` or `{ videoId }`. Auth: `Authorization: Bearer <EXTENSION_API_KEY>`.
+ * Body: `{ url }` or `{ videoId }`. Auth: `Authorization: Bearer
+ * <EXTENSION_API_KEY>` + the app session cookie (TAV-68) — tokens are spent
+ * on the signed-in user's copy of the video.
  *
  * Chains the two explicit UI steps into the extension's ⚡ button: the TAV-67
  * paste flow (ingest + transcript), then `summarizeVideoAction` (LLM summary +
@@ -17,6 +19,7 @@ import {
   extensionPreflight,
   extensionSummary,
   guardExtensionRequest,
+  requireExtensionUser,
   resolveExtensionVideoId,
 } from '@/lib/extension-api';
 
@@ -26,6 +29,9 @@ export const maxDuration = 120;
 export async function POST(req: Request) {
   const denied = guardExtensionRequest(req);
   if (denied) return denied;
+
+  const { user, denied: noSession } = await requireExtensionUser(req);
+  if (noSession) return noSession;
 
   let body: { url?: string; videoId?: string };
   try {
@@ -59,7 +65,7 @@ export async function POST(req: Request) {
 
     // Cached summary — return it without touching the LLM.
     if (staged.alreadySummarized) {
-      const video = await getVideoWithSummary(videoId);
+      const video = await getVideoWithSummary(user.id, videoId);
       return extensionJson(req, {
         ok: true,
         videoId,

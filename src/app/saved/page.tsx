@@ -3,7 +3,7 @@ import { AppShell } from '../_components/AppShell';
 import { SendToReadwiseButton } from '../_components/SendToReadwiseButton';
 import { listBookmarkedSummaries } from '@/lib/video-repo';
 import { getIntegrationSettings } from '@/lib/integrations';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser } from '@/lib/auth';
 import { formatRelative, youtubeVideoUrl } from '../_lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -14,16 +14,17 @@ export const metadata = {
 };
 
 export default async function SavedPage() {
-  const [connected, profile, items, readwiseSettings] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    listBookmarkedSummaries(),
-    getIntegrationSettings('readwise'),
-  ]);
+  const { user, connected } = await resolvePageUser();
+  const [items, readwiseSettings] = connected && user
+    ? await Promise.all([
+        listBookmarkedSummaries(user.id),
+        getIntegrationSettings(user.id, 'readwise'),
+      ])
+    : [[], null] as const;
   const readwiseConfigured = !!readwiseSettings && readwiseSettings.token.length > 0;
 
   return (
-    <AppShell tab="library" libraryActive="saved" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+    <AppShell tab="library" libraryActive="saved" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>★ Saved summaries</h1>
       <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
         Summaries you&apos;ve bookmarked for later reference, sorted by most recently saved.

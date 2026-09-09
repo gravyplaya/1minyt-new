@@ -2,6 +2,10 @@
  * Data access for videos + summaries (TAV-4) + chat messages (TAV-5).
  *
  * All functions are async — backed by PostgreSQL.
+ *
+ * TAV-68: every function takes the owner's user id as its first parameter and
+ * every query carries a user_id predicate. Videos/summaries/chats are per-user
+ * rows keyed (user_id, video_id); upserts conflict on the user-scoped keys.
  */
 
 import { getDb, query, withTransaction } from './db';
@@ -11,7 +15,7 @@ import type { RssVideoEntry } from './youtube';
 
 const SUMMARY_MODEL_KEY = process.env.SUMMARY_MODEL?.trim() || 'openai/gpt-oss-20b:free';
 
-export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcript_status' | 'transcript_fetched_at' | 'transcript_source' | 'video_pref' | 'created_at' | 'updated_at'> & {
+export async function upsertVideo(userId: string, input: Omit<VideoRow, 'transcript' | 'transcript_status' | 'transcript_fetched_at' | 'transcript_source' | 'video_pref' | 'created_at' | 'updated_at'> & {
   transcript?: string | null;
   transcript_status?: TranscriptStatus;
   transcript_fetched_at?: number | null;
@@ -20,29 +24,32 @@ export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcri
   const client = await getDb();
   try {
     const now = Math.floor(Date.now() / 1000);
-    const { rows } = await client.query('SELECT video_id FROM videos WHERE video_id = $1', [input.video_id]);
+    const { rows } = await client.query(
+      'SELECT video_id FROM videos WHERE user_id = $1 AND video_id = $2',
+      [userId, input.video_id],
+    );
     if (rows.length > 0) {
       await client.query(
         `UPDATE videos SET
-          channel_id=$2, title=$3, description=$4,
-          thumbnail_url=$5, duration_seconds=$6,
-          published_at=$7,
-          transcript=COALESCE($8, transcript),
-          transcript_status=COALESCE($9, transcript_status),
-          transcript_fetched_at=COALESCE($10, transcript_fetched_at),
-          transcript_source=COALESCE($11, transcript_source),
-          view_count=$12,
-          like_count=$13,
-          comment_count=$14,
-          favorite_count=$15,
-          tags=$16,
-          category_id=$17,
-          is_live=$18,
-          live_streaming_details=$19,
-          updated_at=$20
-        WHERE video_id=$1`,
+          channel_id=$3, title=$4, description=$5,
+          thumbnail_url=$6, duration_seconds=$7,
+          published_at=$8,
+          transcript=COALESCE($9, transcript),
+          transcript_status=COALESCE($10, transcript_status),
+          transcript_fetched_at=COALESCE($11, transcript_fetched_at),
+          transcript_source=COALESCE($12, transcript_source),
+          view_count=$13,
+          like_count=$14,
+          comment_count=$15,
+          favorite_count=$16,
+          tags=$17,
+          category_id=$18,
+          is_live=$19,
+          live_streaming_details=$20,
+          updated_at=$21
+        WHERE user_id=$1 AND video_id=$2`,
         [
-          input.video_id, input.channel_id, input.title, input.description,
+          userId, input.video_id, input.channel_id, input.title, input.description,
           input.thumbnail_url, input.duration_seconds,
           input.published_at,
           input.transcript ?? null,
@@ -64,7 +71,7 @@ export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcri
     }
     await client.query(
       `INSERT INTO videos (
-        video_id, channel_id, title, description, thumbnail_url,
+        user_id, video_id, channel_id, title, description, thumbnail_url,
         duration_seconds, published_at,
         transcript, transcript_status, transcript_fetched_at, transcript_source,
         view_count, like_count, comment_count, favorite_count,
@@ -79,7 +86,7 @@ export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcri
         $20, $21
       )`,
       [
-        input.video_id, input.channel_id, input.title, input.description,
+        userId, input.video_id, input.channel_id, input.title, input.description,
         input.thumbnail_url, input.duration_seconds,
         input.published_at,
         input.transcript ?? null,
@@ -111,9 +118,12 @@ export async function upsertVideo(input: Omit<VideoRow, 'transcript' | 'transcri
  * is only set from API enrichment, not RSS — so we use COALESCE to preserve
  * any previously-enriched value.
  *
+ * TAV-68: conflicts on the user-scoped key (user_id, video_id).
+ *
  * Returns the count of newly inserted rows (for sync reporting).
  */
 export async function upsertVideosFromRss(
+  userId: string,
   entries: ReadonlyArray<{ videoId: string; channelId: string } & RssVideoEntry>,
 ): Promise<{ inserted: number }> {
   if (entries.length === 0) return { inserted: 0 };
@@ -121,6 +131,7 @@ export async function upsertVideosFromRss(
   try {
     const now = Math.floor(Date.now() / 1000);
     const N = entries.length;
+    const userIds = new Array(N).fill(userId) as string[];
     const ids = entries.map(e => e.videoId);
     const channelIds = entries.map(e => e.channelId);
     const titles = entries.map(e => e.title || '(untitled)');
@@ -132,7 +143,7 @@ export async function upsertVideosFromRss(
 
     const { rows } = await client.query<{ inserted: boolean }>(
       `INSERT INTO videos (
-         video_id, channel_id, title, description, thumbnail_url,
+         user_id, video_id, channel_id, title, description, thumbnail_url,
          duration_seconds, published_at,
          transcript_status,
          view_count, like_count, comment_count, favorite_count,
@@ -140,31 +151,32 @@ export async function upsertVideosFromRss(
          created_at, updated_at
        )
        SELECT
-         video_id, channel_id, title, description, thumbnail_url,
+         user_id, video_id, channel_id, title, description, thumbnail_url,
          NULL, published_at,
          'pending',
          view_count, NULL, NULL, NULL,
          NULL, NULL, 0, NULL,
          created_at, created_at
        FROM unnest(
-         $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
-         $6::integer[], $7::integer[],
-         $8::integer[]
+         $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+         $7::integer[], $8::integer[],
+         $9::integer[]
        ) AS t(
-         video_id, channel_id, title, description, thumbnail_url,
+         user_id, video_id, channel_id, title, description, thumbnail_url,
          published_at, view_count,
          created_at
        )
-       ON CONFLICT (video_id) DO UPDATE SET
+       ON CONFLICT (user_id, video_id) DO UPDATE SET
          channel_id = EXCLUDED.channel_id,
          title = COALESCE(EXCLUDED.title, videos.title),
          description = COALESCE(EXCLUDED.description, videos.description),
          thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, videos.thumbnail_url),
          published_at = COALESCE(EXCLUDED.published_at, videos.published_at),
          view_count = COALESCE(EXCLUDED.view_count, videos.view_count),
-         updated_at = $9
+         updated_at = $10
        RETURNING (xmax = 0) AS inserted`,
       [
+        userIds,
         ids, channelIds, titles, descriptions, thumbnails,
         publishedAts, viewCounts,
         createdAts,
@@ -180,24 +192,27 @@ export async function upsertVideosFromRss(
 
 /** TAV-19: persist a fetched transcript. `source` records whether it came
  *  from YouTube captions ('youtube') or Whisper speech-to-text ('whisper'). */
-export async function setTranscript(videoId: string, text: string, source?: TranscriptSource): Promise<void> {
+export async function setTranscript(userId: string, videoId: string, text: string, source?: TranscriptSource): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const client = await getDb();
   try {
     await client.query(
-      `UPDATE videos SET transcript = $1, transcript_status = 'fetched', transcript_fetched_at = $2, transcript_source = COALESCE($3, transcript_source), updated_at = $4 WHERE video_id = $5`,
-      [text, now, source ?? null, now, videoId],
+      `UPDATE videos SET transcript = $1, transcript_status = 'fetched', transcript_fetched_at = $2, transcript_source = COALESCE($3, transcript_source), updated_at = $4 WHERE user_id = $5 AND video_id = $6`,
+      [text, now, source ?? null, now, userId, videoId],
     );
   } finally {
     client.release();
   }
 }
 
-export async function setTranscriptStatus(videoId: string, status: TranscriptStatus): Promise<void> {
+export async function setTranscriptStatus(userId: string, videoId: string, status: TranscriptStatus): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const client = await getDb();
   try {
-    await client.query('UPDATE videos SET transcript_status = $1, updated_at = $2 WHERE video_id = $3', [status, now, videoId]);
+    await client.query(
+      'UPDATE videos SET transcript_status = $1, updated_at = $2 WHERE user_id = $3 AND video_id = $4',
+      [status, now, userId, videoId],
+    );
   } finally {
     client.release();
   }
@@ -209,20 +224,26 @@ export async function setTranscriptStatus(videoId: string, status: TranscriptSta
  * is validated by the caller (server action); invalid values stored here
  * would silently fall through `computeMusicVideoPresentation` to the default.
  */
-export async function setVideoPref(videoId: string, pref: 'video' | 'audio' | null): Promise<void> {
+export async function setVideoPref(userId: string, videoId: string, pref: 'video' | 'audio' | null): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const client = await getDb();
   try {
-    await client.query('UPDATE videos SET video_pref = $1, updated_at = $2 WHERE video_id = $3', [pref, now, videoId]);
+    await client.query(
+      'UPDATE videos SET video_pref = $1, updated_at = $2 WHERE user_id = $3 AND video_id = $4',
+      [pref, now, userId, videoId],
+    );
   } finally {
     client.release();
   }
 }
 
-export async function getVideo(videoId: string): Promise<VideoRow | null> {
+export async function getVideo(userId: string, videoId: string): Promise<VideoRow | null> {
   const client = await getDb();
   try {
-    const { rows } = await client.query<VideoRow>('SELECT * FROM videos WHERE video_id = $1', [videoId]);
+    const { rows } = await client.query<VideoRow>(
+      'SELECT * FROM videos WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
+    );
     return rows[0] ?? null;
   } finally {
     client.release();
@@ -237,24 +258,27 @@ export async function getVideo(videoId: string): Promise<VideoRow | null> {
  * Mirrors the hydration pattern `listVideosByChannel` uses, but for one video.
  * Returns null when the video isn't in the local cache.
  */
-export async function getVideoWithSummary(videoId: string): Promise<VideoWithSummary | null> {
+export async function getVideoWithSummary(userId: string, videoId: string): Promise<VideoWithSummary | null> {
   const client = await getDb();
   try {
-    const { rows } = await client.query<VideoRow>('SELECT * FROM videos WHERE video_id = $1', [videoId]);
+    const { rows } = await client.query<VideoRow>(
+      'SELECT * FROM videos WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
+    );
     const video = rows[0];
     if (!video) return null;
 
     // Latest summary for this video.
     const summaryResult = await client.query<SummaryDbRow>(
-      'SELECT * FROM summaries WHERE video_id = $1 ORDER BY created_at DESC LIMIT 1',
-      [videoId],
+      'SELECT * FROM summaries WHERE user_id = $1 AND video_id = $2 ORDER BY created_at DESC LIMIT 1',
+      [userId, videoId],
     );
     const summary = summaryResult.rows[0] ? hydrateSummary(summaryResult.rows[0]) : null;
 
     // Chapters (TAV-13).
     const chapterResult = await client.query<{ chapters: string }>(
-      'SELECT chapters FROM video_chapters WHERE video_id = $1',
-      [videoId],
+      'SELECT chapters FROM video_chapters WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
     );
     let chapters: Chapter[] | null = null;
     if (chapterResult.rows[0]?.chapters) {
@@ -266,8 +290,8 @@ export async function getVideoWithSummary(videoId: string): Promise<VideoWithSum
       comments: string; fetched_at: number;
       summary: string | null; summary_model: string | null;
     }>(
-      'SELECT comments, fetched_at, summary, summary_model FROM video_comments WHERE video_id = $1',
-      [videoId],
+      'SELECT comments, fetched_at, summary, summary_model FROM video_comments WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
     );
     let community_pulse: CommunityPulse | null = null;
     if (pulseResult.rows[0]) {
@@ -285,8 +309,8 @@ export async function getVideoWithSummary(videoId: string): Promise<VideoWithSum
 
     // Like state (TAV-41).
     const likedResult = await client.query<{ video_id: string }>(
-      'SELECT video_id FROM video_likes WHERE video_id = $1',
-      [videoId],
+      'SELECT video_id FROM video_likes WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
     );
     const liked = likedResult.rows.length > 0;
 
@@ -303,6 +327,7 @@ export async function getVideoWithSummary(videoId: string): Promise<VideoWithSum
 }
 
 export async function listVideosByChannel(
+  userId: string,
   channelId: string,
   limit = 30,
   options?: { excludeSeen?: boolean },
@@ -317,21 +342,21 @@ export async function listVideosByChannel(
     // pre-triage videos (no video_states row) — only `state = 'seen'`
     // rows are excluded.
     const seenClause = excludeSeen
-      ? 'LEFT JOIN video_states vs ON vs.video_id = videos.video_id WHERE videos.channel_id = $1 AND (vs.state IS NULL OR vs.state <> \'seen\')'
-      : 'WHERE videos.channel_id = $1';
+      ? `LEFT JOIN video_states vs ON vs.user_id = videos.user_id AND vs.video_id = videos.video_id WHERE videos.user_id = $1 AND videos.channel_id = $2 AND (vs.state IS NULL OR vs.state <> 'seen')`
+      : 'WHERE videos.user_id = $1 AND videos.channel_id = $2';
     const { rows } = await client.query<VideoRow>(
-      `SELECT videos.* FROM videos ${seenClause} ORDER BY videos.published_at DESC LIMIT $2`,
-      [channelId, limit],
+      `SELECT videos.* FROM videos ${seenClause} ORDER BY videos.published_at DESC LIMIT $3`,
+      [userId, channelId, limit],
     );
     if (rows.length === 0) return [];
     // Hydrate latest summary for each video in one query.
     const videoIds = rows.map(r => r.video_id);
-    const placeholders = videoIds.map((_, i) => `$${i + 1}`).join(',');
+    const placeholders = videoIds.map((_, i) => `$${i + 2}`).join(',');
     const summaryResult = await client.query(
       `SELECT DISTINCT ON (video_id) * FROM summaries
-       WHERE video_id IN (${placeholders})
+       WHERE user_id = $1 AND video_id IN (${placeholders})
        ORDER BY video_id, created_at DESC`,
-      videoIds,
+      [userId, ...videoIds],
     );
     const summaryMap = new Map<string, SummaryRow>();
     for (const row of summaryResult.rows as SummaryDbRow[]) {
@@ -340,8 +365,8 @@ export async function listVideosByChannel(
 
     // Hydrate chapters for all videos in one query (TAV-13).
     const chapterResult = await client.query<{ video_id: string; chapters: string }>(
-      `SELECT video_id, chapters FROM video_chapters WHERE video_id IN (${placeholders})`,
-      videoIds,
+      `SELECT video_id, chapters FROM video_chapters WHERE user_id = $1 AND video_id IN (${placeholders})`,
+      [userId, ...videoIds],
     );
     const chapterMap = new Map<string, Chapter[]>();
     for (const row of chapterResult.rows) {
@@ -357,7 +382,7 @@ export async function listVideosByChannel(
       fetched_at: number;
       summary: string | null;
       summary_model: string | null;
-    }>(`SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE video_id IN (${placeholders})`, videoIds);
+    }>(`SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE user_id = $1 AND video_id IN (${placeholders})`, [userId, ...videoIds]);
     const pulseMap = new Map<string, CommunityPulse>();
     for (const row of pulseResult.rows) {
       let comments: VideoComment[] = [];
@@ -374,8 +399,8 @@ export async function listVideosByChannel(
     // TAV-41: hydrate like state for all videos in one query so the client
     // rows don't each fire a getLikeStateAction round-trip on mount.
     const likedResult = await client.query<{ video_id: string }>(
-      `SELECT video_id FROM video_likes WHERE video_id IN (${placeholders})`,
-      videoIds,
+      `SELECT video_id FROM video_likes WHERE user_id = $1 AND video_id IN (${placeholders})`,
+      [userId, ...videoIds],
     );
     const likedSet = new Set(likedResult.rows.map(r => r.video_id));
 
@@ -391,12 +416,12 @@ export async function listVideosByChannel(
   }
 }
 
-export async function listRecentUploadIds(channelId: string, limit = 12): Promise<{ video_id: string; title: string }[]> {
+export async function listRecentUploadIds(userId: string, channelId: string, limit = 12): Promise<{ video_id: string; title: string }[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ video_id: string; title: string }>(
-      'SELECT video_id, title FROM videos WHERE channel_id = $1 ORDER BY published_at DESC LIMIT $2',
-      [channelId, limit],
+      'SELECT video_id, title FROM videos WHERE user_id = $1 AND channel_id = $2 ORDER BY published_at DESC LIMIT $3',
+      [userId, channelId, limit],
     );
     return rows;
   } finally {
@@ -409,12 +434,12 @@ export async function listRecentUploadIds(channelId: string, limit = 12): Promis
  * digest generator to diff against freshly-fetched uploads and identify
  * which videos are genuinely new (inserted by this sync pass).
  */
-export async function listVideoIdsByChannel(channelId: string): Promise<Set<string>> {
+export async function listVideoIdsByChannel(userId: string, channelId: string): Promise<Set<string>> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ video_id: string }>(
-      'SELECT video_id FROM videos WHERE channel_id = $1',
-      [channelId],
+      'SELECT video_id FROM videos WHERE user_id = $1 AND channel_id = $2',
+      [userId, channelId],
     );
     return new Set(rows.map(r => r.video_id));
   } finally {
@@ -424,12 +449,12 @@ export async function listVideoIdsByChannel(channelId: string): Promise<Set<stri
 
 // ----- summaries -------------------------------------------------------------
 
-export async function latestSummary(videoId: string): Promise<SummaryRow | null> {
+export async function latestSummary(userId: string, videoId: string): Promise<SummaryRow | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query<SummaryDbRow>(
-      'SELECT * FROM summaries WHERE video_id = $1 ORDER BY created_at DESC LIMIT 1',
-      [videoId],
+      'SELECT * FROM summaries WHERE user_id = $1 AND video_id = $2 ORDER BY created_at DESC LIMIT 1',
+      [userId, videoId],
     );
     return rows[0] ? hydrateSummary(rows[0]) : null;
   } finally {
@@ -442,17 +467,17 @@ export async function latestSummary(videoId: string): Promise<SummaryRow | null>
  * video_id → SummaryRow. Videos without a cached summary are absent from the
  * map. Used by the playlist synthesizer (TAV-26) to gather per-video TL;DRs.
  */
-export async function latestSummariesByVideoIds(videoIds: string[]): Promise<Map<string, SummaryRow>> {
+export async function latestSummariesByVideoIds(userId: string, videoIds: string[]): Promise<Map<string, SummaryRow>> {
   const out = new Map<string, SummaryRow>();
   if (videoIds.length === 0) return out;
   const client = await getDb();
   try {
-    const placeholders = videoIds.map((_, i) => `$${i + 1}`).join(',');
+    const placeholders = videoIds.map((_, i) => `$${i + 2}`).join(',');
     const { rows } = await client.query<SummaryDbRow>(
       `SELECT DISTINCT ON (video_id) * FROM summaries
-       WHERE video_id IN (${placeholders})
+       WHERE user_id = $1 AND video_id IN (${placeholders})
        ORDER BY video_id, created_at DESC`,
-      videoIds,
+      [userId, ...videoIds],
     );
     for (const row of rows) {
       out.set(row.video_id, hydrateSummary(row));
@@ -463,7 +488,7 @@ export async function latestSummariesByVideoIds(videoIds: string[]): Promise<Map
   }
 }
 
-export async function saveSummary(input: {
+export async function saveSummary(userId: string, input: {
   video_id: string;
   model: string;
   tldr: string;
@@ -491,9 +516,9 @@ export async function saveSummary(input: {
     };
 
     await client.query(
-      `INSERT INTO summaries (id, video_id, model, tldr, key_points, follow_ups, topics, prompt, token_count, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (video_id, model) DO UPDATE SET
+      `INSERT INTO summaries (id, user_id, video_id, model, tldr, key_points, follow_ups, topics, prompt, token_count, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (user_id, video_id, model) DO UPDATE SET
         id=excluded.id,
         tldr=excluded.tldr,
         key_points=excluded.key_points,
@@ -502,7 +527,7 @@ export async function saveSummary(input: {
         prompt=excluded.prompt,
         token_count=excluded.token_count,
         created_at=excluded.created_at`,
-      [payload.id, payload.video_id, payload.model, payload.tldr, payload.key_points, payload.follow_ups, payload.topics, payload.prompt, payload.token_count, payload.created_at],
+      [payload.id, userId, payload.video_id, payload.model, payload.tldr, payload.key_points, payload.follow_ups, payload.topics, payload.prompt, payload.token_count, payload.created_at],
     );
 
     return hydrateSummary({
@@ -531,38 +556,41 @@ export function currentSummaryModel(): string {
 
 // TAV-41: like toggle. Not wrapped in a transaction because the only race is
 // a double-click on the heart, which leaves liked=true regardless — harmless
-// for a single-user app and the action returns the post-toggle state.
-export async function toggleVideoLike(videoId: string): Promise<{ liked: boolean; channelId: string | null }> {
+// and the action returns the post-toggle state.
+export async function toggleVideoLike(userId: string, videoId: string): Promise<{ liked: boolean; channelId: string | null }> {
   const client = await getDb();
   try {
     const now = Math.floor(Date.now() / 1000);
     const existing = await client.query<{ video_id: string }>(
-      'SELECT video_id FROM video_likes WHERE video_id = $1', [videoId],
+      'SELECT video_id FROM video_likes WHERE user_id = $1 AND video_id = $2', [userId, videoId],
     );
     if (existing.rowCount) {
-      await client.query('DELETE FROM video_likes WHERE video_id = $1', [videoId]);
+      await client.query('DELETE FROM video_likes WHERE user_id = $1 AND video_id = $2', [userId, videoId]);
       const channel = await client.query<{ channel_id: string }>(
-        'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+        'SELECT channel_id FROM videos WHERE user_id = $1 AND video_id = $2', [userId, videoId],
       );
       return { liked: false, channelId: channel.rows[0]?.channel_id ?? null };
     }
     const channel = await client.query<{ channel_id: string }>(
-      'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+      'SELECT channel_id FROM videos WHERE user_id = $1 AND video_id = $2', [userId, videoId],
     );
-    await client.query('INSERT INTO video_likes (video_id, liked_at) VALUES ($1, $2) ON CONFLICT (video_id) DO NOTHING', [videoId, now]);
+    await client.query(
+      'INSERT INTO video_likes (user_id, video_id, liked_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, video_id) DO NOTHING',
+      [userId, videoId, now],
+    );
     return { liked: true, channelId: channel.rows[0]?.channel_id ?? null };
   } finally { client.release(); }
 }
 
-export async function recordVideoPlay(videoId: string, progressSeconds = 0, completed = false): Promise<void> {
+export async function recordVideoPlay(userId: string, videoId: string, progressSeconds = 0, completed = false): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   await query(
-    `INSERT INTO video_play_history (video_id, first_played_at, last_played_at, play_count, last_progress_seconds, completed)
-     VALUES ($1, $2, $2, 1, $3, $4)
-     ON CONFLICT (video_id) DO UPDATE SET last_played_at = $2, play_count = video_play_history.play_count + 1,
+    `INSERT INTO video_play_history (user_id, video_id, first_played_at, last_played_at, play_count, last_progress_seconds, completed)
+     VALUES ($1, $2, $3, $3, 1, $4, $5)
+     ON CONFLICT (user_id, video_id) DO UPDATE SET last_played_at = $3, play_count = video_play_history.play_count + 1,
        last_progress_seconds = EXCLUDED.last_progress_seconds,
        completed = GREATEST(video_play_history.completed, EXCLUDED.completed)`,
-    [videoId, now, Math.max(0, Math.floor(progressSeconds)), completed ? 1 : 0],
+    [userId, videoId, now, Math.max(0, Math.floor(progressSeconds)), completed ? 1 : 0],
   );
 }
 
@@ -589,12 +617,12 @@ export async function recordVideoPlay(videoId: string, progressSeconds = 0, comp
 /**
  * Ensure a minimal `channels` row exists for the given channel id, so that
  * `videos.channel_id` FK constraint is satisfied when inserting a video from
- * an uncached channel. Uses `ON CONFLICT (channel_id) DO NOTHING` so existing
- * channels are left untouched (their richer metadata from a sync is preserved).
+ * an uncached channel. Uses `ON CONFLICT (user_id, channel_id) DO NOTHING` so
+ * existing channels are left untouched (their richer metadata from a sync is
+ * preserved).
  *
  * Shared by {@link recordLikedVideos} (batch liked-video import) and the
- * /watch page's best-effort fetch (`bestEffortFetchVideo`) to avoid duplicating
- * the pattern.
+ * ingest paths to avoid duplicating the pattern.
  *
  * @param channelId  YouTube channel id. If null/empty, no row is inserted —
  *                   callers should fall back to `'unknown'` for the video's
@@ -603,16 +631,17 @@ export async function recordVideoPlay(videoId: string, progressSeconds = 0, comp
  * @param client  Optional transaction client. When omitted, uses the pool.
  */
 export async function ensureChannelRow(
+  userId: string,
   channelId: string | null,
   channelTitle: string | null,
   client?: import('pg').PoolClient,
 ): Promise<void> {
   if (!channelId) return;
   const now = Math.floor(Date.now() / 1000);
-  const sql = `INSERT INTO channels (channel_id, title, synced_at, created_at, updated_at)
-               VALUES ($1, $2, $3, $3, $3)
-               ON CONFLICT (channel_id) DO NOTHING`;
-  const params = [channelId, channelTitle ?? channelId, now];
+  const sql = `INSERT INTO channels (user_id, channel_id, title, synced_at, created_at, updated_at)
+               VALUES ($1, $2, $3, $3, $3, $3)
+               ON CONFLICT (user_id, channel_id) DO NOTHING`;
+  const params = [userId, channelId, channelTitle ?? channelId, now];
   if (client) {
     await client.query(sql, params);
   } else {
@@ -620,7 +649,7 @@ export async function ensureChannelRow(
   }
 }
 
-export async function recordLikedVideos(likes: ReadonlyArray<{
+export async function recordLikedVideos(userId: string, likes: ReadonlyArray<{
   video_id: string;
   channel_id: string | null;
   channel_title: string | null;
@@ -643,11 +672,11 @@ export async function recordLikedVideos(likes: ReadonlyArray<{
     for (const input of likes) {
       if (seen.has(input.video_id)) { skipped++; continue; }
       seen.add(input.video_id);
-      await ensureChannelRow(input.channel_id, input.channel_title, client);
+      await ensureChannelRow(userId, input.channel_id, input.channel_title, client);
       const channelId = input.channel_id ?? 'unknown';
       await client.query(
         `INSERT INTO videos (
-          video_id, channel_id, title, description, thumbnail_url,
+          user_id, video_id, channel_id, title, description, thumbnail_url,
           duration_seconds, published_at,
           transcript_status,
           view_count, like_count, comment_count, favorite_count,
@@ -661,7 +690,7 @@ export async function recordLikedVideos(likes: ReadonlyArray<{
           NULL, NULL, 0, NULL,
           $8, $8
         )
-        ON CONFLICT (video_id) DO UPDATE SET
+        ON CONFLICT (user_id, video_id) DO UPDATE SET
           title = COALESCE(EXCLUDED.title, videos.title),
           description = COALESCE(EXCLUDED.description, videos.description),
           thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, videos.thumbnail_url),
@@ -670,16 +699,16 @@ export async function recordLikedVideos(likes: ReadonlyArray<{
           channel_id = CASE WHEN videos.channel_id = 'unknown' THEN EXCLUDED.channel_id ELSE videos.channel_id END,
           updated_at = $8`,
         [
-          input.video_id, channelId, input.title, input.description, input.thumbnail_url,
+          userId, input.video_id, channelId, input.title, input.description, input.thumbnail_url,
           input.duration_seconds, input.published_at,
           now,
         ],
       );
       const liked = await client.query(
-        `INSERT INTO video_likes (video_id, liked_at) VALUES ($1, $2)
-         ON CONFLICT (video_id) DO NOTHING
+        `INSERT INTO video_likes (user_id, video_id, liked_at) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, video_id) DO NOTHING
          RETURNING video_id`,
-        [input.video_id, input.liked_at],
+        [userId, input.video_id, input.liked_at],
       );
       if (liked.rowCount && liked.rowCount > 0) inserted++; else skipped++;
     }
@@ -688,30 +717,34 @@ export async function recordLikedVideos(likes: ReadonlyArray<{
 }
 
 
-export async function listLikedVideos(limit = 100): Promise<VideoWithSummary[]> {
-  return listVideosFromActivity('video_likes', 'liked_at', limit);
+export async function listLikedVideos(userId: string, limit = 100): Promise<VideoWithSummary[]> {
+  return listVideosFromActivity(userId, 'video_likes', 'liked_at', limit);
 }
 
-export async function listPlayHistory(limit = 100): Promise<VideoWithSummary[]> {
-  return listVideosFromActivity('video_play_history', 'last_played_at', limit);
+export async function listPlayHistory(userId: string, limit = 100): Promise<VideoWithSummary[]> {
+  return listVideosFromActivity(userId, 'video_play_history', 'last_played_at', limit);
 }
 
-async function listVideosFromActivity(table: 'video_likes' | 'video_play_history', timestampColumn: string, limit: number): Promise<VideoWithSummary[]> {
+async function listVideosFromActivity(userId: string, table: 'video_likes' | 'video_play_history', timestampColumn: string, limit: number): Promise<VideoWithSummary[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<VideoRow>(
-      `SELECT v.* FROM videos v JOIN ${table} a ON a.video_id = v.video_id ORDER BY a.${timestampColumn} DESC LIMIT $1`, [limit],
+      `SELECT v.* FROM videos v JOIN ${table} a ON a.user_id = v.user_id AND a.video_id = v.video_id WHERE v.user_id = $1 ORDER BY a.${timestampColumn} DESC LIMIT $2`,
+      [userId, limit],
     );
     if (!rows.length) return [];
     const ids = rows.map(v => v.video_id);
-    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-    const summaries = await client.query<SummaryDbRow>(`SELECT DISTINCT ON (video_id) * FROM summaries WHERE video_id IN (${placeholders}) ORDER BY video_id, created_at DESC`, ids);
+    const placeholders = ids.map((_, i) => `$${i + 2}`).join(',');
+    const summaries = await client.query<SummaryDbRow>(
+      `SELECT DISTINCT ON (video_id) * FROM summaries WHERE user_id = $1 AND video_id IN (${placeholders}) ORDER BY video_id, created_at DESC`,
+      [userId, ...ids],
+    );
     const summaryMap = new Map(summaries.rows.map(row => [row.video_id, hydrateSummary(row)]));
 
     // Hydrate chapters for all videos in one query (TAV-13).
     const chapterResult = await client.query<{ video_id: string; chapters: string }>(
-      `SELECT video_id, chapters FROM video_chapters WHERE video_id IN (${placeholders})`,
-      ids,
+      `SELECT video_id, chapters FROM video_chapters WHERE user_id = $1 AND video_id IN (${placeholders})`,
+      [userId, ...ids],
     );
     const chapterMap = new Map<string, Chapter[]>();
     for (const row of chapterResult.rows) {
@@ -727,7 +760,7 @@ async function listVideosFromActivity(table: 'video_likes' | 'video_play_history
       fetched_at: number;
       summary: string | null;
       summary_model: string | null;
-    }>(`SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE video_id IN (${placeholders})`, ids);
+    }>(`SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE user_id = $1 AND video_id IN (${placeholders})`, [userId, ...ids]);
     const pulseMap = new Map<string, CommunityPulse>();
     for (const row of pulseResult.rows) {
       let comments: VideoComment[] = [];
@@ -745,8 +778,8 @@ async function listVideosFromActivity(table: 'video_likes' | 'video_play_history
     // liked by definition, but this single query keeps the shape uniform and
     // costs nothing relative to the per-row round-trips it replaces.
     const likedResult = await client.query<{ video_id: string }>(
-      `SELECT video_id FROM video_likes WHERE video_id IN (${placeholders})`,
-      ids,
+      `SELECT video_id FROM video_likes WHERE user_id = $1 AND video_id IN (${placeholders})`,
+      [userId, ...ids],
     );
     const likedSet = new Set(likedResult.rows.map(r => r.video_id));
 
@@ -761,25 +794,25 @@ async function listVideosFromActivity(table: 'video_likes' | 'video_play_history
 }
 
 /** Flip the bookmark flag on a video's latest summary. */
-export async function toggleBookmark(videoId: string): Promise<{ bookmarked: 0 | 1 | null; channelId: string | null }> {
+export async function toggleBookmark(userId: string, videoId: string): Promise<{ bookmarked: 0 | 1 | null; channelId: string | null }> {
   const client = await getDb();
   try {
     // Find the latest summary for this video.
     const { rows } = await client.query<SummaryDbRow>(
-      'SELECT id, bookmarked FROM summaries WHERE video_id = $1 ORDER BY created_at DESC LIMIT 1',
-      [videoId],
+      'SELECT id, bookmarked FROM summaries WHERE user_id = $1 AND video_id = $2 ORDER BY created_at DESC LIMIT 1',
+      [userId, videoId],
     );
     if (rows.length === 0) {
       const channel = await client.query<{ channel_id: string }>(
-        'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+        'SELECT channel_id FROM videos WHERE user_id = $1 AND video_id = $2', [userId, videoId],
       );
       return { bookmarked: null, channelId: channel.rows[0]?.channel_id ?? null };
     }
     const current = rows[0].bookmarked === 1 ? 1 : 0;
     const next: 0 | 1 = current === 1 ? 0 : 1;
-    await client.query('UPDATE summaries SET bookmarked = $1 WHERE id = $2', [next, rows[0].id]);
+    await client.query('UPDATE summaries SET bookmarked = $1 WHERE user_id = $2 AND id = $3', [next, userId, rows[0].id]);
     const channel = await client.query<{ channel_id: string }>(
-      'SELECT channel_id FROM videos WHERE video_id = $1', [videoId],
+      'SELECT channel_id FROM videos WHERE user_id = $1 AND video_id = $2', [userId, videoId],
     );
     return { bookmarked: next, channelId: channel.rows[0]?.channel_id ?? null };
   } finally {
@@ -801,7 +834,7 @@ export interface BookmarkedSummary {
  * created_at (the summary row's created_at doubles as the bookmark timestamp
  * for the v1 simple boolean flag — there is no separate bookmarked_at column).
  */
-export async function listBookmarkedSummaries(): Promise<BookmarkedSummary[]> {
+export async function listBookmarkedSummaries(userId: string): Promise<BookmarkedSummary[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -836,10 +869,11 @@ export async function listBookmarkedSummaries(): Promise<BookmarkedSummary[]> {
          v.duration_seconds AS v_duration,
          c.title         AS c_title
        FROM summaries s
-       JOIN videos  v ON v.video_id = s.video_id
-       JOIN channels c ON c.channel_id = v.channel_id
-       WHERE s.bookmarked = 1
+       JOIN videos  v ON v.user_id = s.user_id AND v.video_id = s.video_id
+       JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+       WHERE s.user_id = $1 AND s.bookmarked = 1
        ORDER BY s.created_at DESC`,
+      [userId],
     );
 
     return rows.map(r => {
@@ -880,7 +914,7 @@ export async function listBookmarkedSummaries(): Promise<BookmarkedSummary[]> {
  * payload for one summary without pulling every bookmark. Returns null when
  * the video has no bookmarked summary.
  */
-export async function getBookmarkedSummary(videoId: string): Promise<BookmarkedSummary | null> {
+export async function getBookmarkedSummary(userId: string, videoId: string): Promise<BookmarkedSummary | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -912,12 +946,12 @@ export async function getBookmarkedSummary(videoId: string): Promise<BookmarkedS
          v.duration_seconds AS v_duration,
          c.title         AS c_title
        FROM summaries s
-       JOIN videos  v ON v.video_id = s.video_id
-       JOIN channels c ON c.channel_id = v.channel_id
-       WHERE s.bookmarked = 1 AND s.video_id = $1
+       JOIN videos  v ON v.user_id = s.user_id AND v.video_id = s.video_id
+       JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+       WHERE s.user_id = $1 AND s.bookmarked = 1 AND s.video_id = $2
        ORDER BY s.created_at DESC
        LIMIT 1`,
-      [videoId],
+      [userId, videoId],
     );
     if (rows.length === 0) return null;
     const r = rows[0];
@@ -973,7 +1007,7 @@ export interface SummarizedVideo {
  * can render them with the same VideoSummaryRow component used on channel
  * pages — embedded player, chat, bookmark/like/queue, references, etc.
  */
-export async function listSummarizedVideos(limit = 500): Promise<SummarizedVideo[]> {
+export async function listSummarizedVideos(userId: string, limit = 500): Promise<SummarizedVideo[]> {
   const client = await getDb();
   try {
     // Fetch the full video rows joined with the latest summary per video,
@@ -985,25 +1019,26 @@ export async function listSummarizedVideos(limit = 500): Promise<SummarizedVideo
            c.title      AS c_title,
            c.music_flag AS music_flag
          FROM summaries s
-         JOIN videos   v ON v.video_id = s.video_id
-         JOIN channels c ON c.channel_id = v.channel_id
+         JOIN videos   v ON v.user_id = s.user_id AND v.video_id = s.video_id
+         JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+         WHERE s.user_id = $1
          ORDER BY s.video_id, s.created_at DESC
        ) latest
        ORDER BY latest.created_at DESC
-       LIMIT $1`,
-      [limit],
+       LIMIT $2`,
+      [userId, limit],
     );
     if (rows.length === 0) return [];
 
     const videoIds = rows.map(r => r.video_id);
-    const placeholders = videoIds.map((_, i) => `$${i + 1}`).join(',');
+    const placeholders = videoIds.map((_, i) => `$${i + 2}`).join(',');
 
     // Latest summary per video (same set as the outer query).
     const summaryResult = await client.query(
       `SELECT DISTINCT ON (video_id) * FROM summaries
-       WHERE video_id IN (${placeholders})
+       WHERE user_id = $1 AND video_id IN (${placeholders})
        ORDER BY video_id, created_at DESC`,
-      videoIds,
+      [userId, ...videoIds],
     );
     const summaryMap = new Map<string, SummaryRow>();
     for (const row of summaryResult.rows as SummaryDbRow[]) {
@@ -1012,8 +1047,8 @@ export async function listSummarizedVideos(limit = 500): Promise<SummarizedVideo
 
     // Chapters (TAV-13).
     const chapterResult = await client.query<{ video_id: string; chapters: string }>(
-      `SELECT video_id, chapters FROM video_chapters WHERE video_id IN (${placeholders})`,
-      videoIds,
+      `SELECT video_id, chapters FROM video_chapters WHERE user_id = $1 AND video_id IN (${placeholders})`,
+      [userId, ...videoIds],
     );
     const chapterMap = new Map<string, Chapter[]>();
     for (const row of chapterResult.rows) {
@@ -1024,7 +1059,7 @@ export async function listSummarizedVideos(limit = 500): Promise<SummarizedVideo
     const pulseResult = await client.query<{
       video_id: string; comments: string; fetched_at: number;
       summary: string | null; summary_model: string | null;
-    }>(`SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE video_id IN (${placeholders})`, videoIds);
+    }>(`SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE user_id = $1 AND video_id IN (${placeholders})`, [userId, ...videoIds]);
     const pulseMap = new Map<string, CommunityPulse>();
     for (const row of pulseResult.rows) {
       let comments: VideoComment[] = [];
@@ -1038,8 +1073,8 @@ export async function listSummarizedVideos(limit = 500): Promise<SummarizedVideo
 
     // Like state (TAV-41).
     const likedResult = await client.query<{ video_id: string }>(
-      `SELECT video_id FROM video_likes WHERE video_id IN (${placeholders})`,
-      videoIds,
+      `SELECT video_id FROM video_likes WHERE user_id = $1 AND video_id IN (${placeholders})`,
+      [userId, ...videoIds],
     );
     const likedSet = new Set(likedResult.rows.map(r => r.video_id));
 
@@ -1063,10 +1098,13 @@ export async function listSummarizedVideos(limit = 500): Promise<SummarizedVideo
 }
 
 /** Count of distinct videos with at least one cached summary — for the sidebar badge. */
-export async function countSummarizedVideos(): Promise<number> {
+export async function countSummarizedVideos(userId: string): Promise<number> {
   const client = await getDb();
   try {
-    const { rows } = await client.query<{ n: string }>('SELECT COUNT(DISTINCT video_id) AS n FROM summaries');
+    const { rows } = await client.query<{ n: string }>(
+      'SELECT COUNT(DISTINCT video_id) AS n FROM summaries WHERE user_id = $1',
+      [userId],
+    );
     return Number(rows[0]?.n ?? 0);
   } finally {
     client.release();
@@ -1075,7 +1113,7 @@ export async function countSummarizedVideos(): Promise<number> {
 
 // ----- TAV-5: chat message persistence ---------------------------------------
 
-export async function saveChatMessage(input: {
+export async function saveChatMessage(userId: string, input: {
   video_id: string;
   role: 'user' | 'assistant';
   content: string;
@@ -1085,8 +1123,8 @@ export async function saveChatMessage(input: {
     const now = Math.floor(Date.now() / 1000);
     const id = newId();
     await client.query(
-      'INSERT INTO chat_messages (id, video_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5)',
-      [id, input.video_id, input.role, input.content, now],
+      'INSERT INTO chat_messages (id, user_id, video_id, role, content, created_at) VALUES ($1, $2, $3, $4, $5, $6)',
+      [id, userId, input.video_id, input.role, input.content, now],
     );
     return { id, video_id: input.video_id, role: input.role, content: input.content, created_at: now };
   } finally {
@@ -1094,12 +1132,12 @@ export async function saveChatMessage(input: {
   }
 }
 
-export async function listChatMessages(videoId: string, limit = 50): Promise<ChatMessage[]> {
+export async function listChatMessages(userId: string, videoId: string, limit = 50): Promise<ChatMessage[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query(
-      'SELECT * FROM chat_messages WHERE video_id = $1 ORDER BY created_at ASC, id ASC LIMIT $2',
-      [videoId, limit],
+      'SELECT * FROM chat_messages WHERE user_id = $1 AND video_id = $2 ORDER BY created_at ASC, id ASC LIMIT $3',
+      [userId, videoId, limit],
     );
     return rows.map((r: { id: string; video_id: string; role: string; content: string; created_at: number }) => ({
       id: r.id,
@@ -1115,7 +1153,7 @@ export async function listChatMessages(videoId: string, limit = 50): Promise<Cha
 
 // ----- TAV-13: AI chapter persistence ----------------------------------------
 
-export async function saveChapters(input: {
+export async function saveChapters(userId: string, input: {
   video_id: string;
   chapters: Chapter[];
   model: string;
@@ -1126,14 +1164,14 @@ export async function saveChapters(input: {
     const now = Math.floor(Date.now() / 1000);
     const chaptersJson = JSON.stringify(input.chapters);
     await client.query(
-      `INSERT INTO video_chapters (video_id, chapters, model, token_count, created_at)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (video_id) DO UPDATE SET
+      `INSERT INTO video_chapters (user_id, video_id, chapters, model, token_count, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id, video_id) DO UPDATE SET
         chapters = excluded.chapters,
         model = excluded.model,
         token_count = excluded.token_count,
         created_at = excluded.created_at`,
-      [input.video_id, chaptersJson, input.model, input.token_count, now],
+      [userId, input.video_id, chaptersJson, input.model, input.token_count, now],
     );
     return input.chapters;
   } finally {
@@ -1141,12 +1179,12 @@ export async function saveChapters(input: {
   }
 }
 
-export async function getChapters(videoId: string): Promise<Chapter[] | null> {
+export async function getChapters(userId: string, videoId: string): Promise<Chapter[] | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{ chapters: string }>(
-      'SELECT chapters FROM video_chapters WHERE video_id = $1',
-      [videoId],
+      'SELECT chapters FROM video_chapters WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
     );
     if (rows.length === 0) return null;
     try {
@@ -1165,11 +1203,11 @@ export async function getChapters(videoId: string): Promise<Chapter[] | null> {
  * Hydrate the video + channel + summary-presence details for a list of video
  * ids, as needed by the /digests page. Returns rows sorted by published_at desc.
  */
-export async function listDigestVideos(videoIds: string[]): Promise<import('./types').DigestVideoEntry[]> {
+export async function listDigestVideos(userId: string, videoIds: string[]): Promise<import('./types').DigestVideoEntry[]> {
   if (videoIds.length === 0) return [];
   const client = await getDb();
   try {
-    const placeholders = videoIds.map((_, i) => `$${i + 1}`).join(',');
+    const placeholders = videoIds.map((_, i) => `$${i + 2}`).join(',');
     const { rows } = await client.query<{
       video_id: string;
       title: string;
@@ -1188,12 +1226,12 @@ export async function listDigestVideos(videoIds: string[]): Promise<import('./ty
          v.published_at,
          v.channel_id,
          c.title AS channel_title,
-         (SELECT COUNT(*) FROM summaries s WHERE s.video_id = v.video_id) AS summary_count
+         (SELECT COUNT(*) FROM summaries s WHERE s.user_id = v.user_id AND s.video_id = v.video_id) AS summary_count
        FROM videos v
-       JOIN channels c ON c.channel_id = v.channel_id
-       WHERE v.video_id IN (${placeholders})
+       JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+       WHERE v.user_id = $1 AND v.video_id IN (${placeholders})
        ORDER BY v.published_at DESC NULLS LAST`,
-      videoIds,
+      [userId, ...videoIds],
     );
     return rows.map(r => ({
       video_id: r.video_id,
@@ -1218,6 +1256,7 @@ export async function listDigestVideos(videoIds: string[]): Promise<import('./ty
  * accrue, so a snapshot is more useful than a diff.
  */
 export async function upsertVideoComments(
+  userId: string,
   videoId: string,
   comments: VideoComment[],
 ): Promise<void> {
@@ -1225,13 +1264,13 @@ export async function upsertVideoComments(
   try {
     const now = Math.floor(Date.now() / 1000);
     await client.query(
-      `INSERT INTO video_comments (video_id, comments, fetched_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (video_id) DO UPDATE SET
+      `INSERT INTO video_comments (user_id, video_id, comments, fetched_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id, video_id) DO UPDATE SET
         comments = excluded.comments,
         fetched_at = excluded.fetched_at,
         updated_at = excluded.updated_at`,
-      [videoId, JSON.stringify(comments), now, now, now],
+      [userId, videoId, JSON.stringify(comments), now, now, now],
     );
   } finally {
     client.release();
@@ -1243,6 +1282,7 @@ export async function upsertVideoComments(
  * comments are upserted; updates the summary fields in place.
  */
 export async function setCommentSummary(
+  userId: string,
   videoId: string,
   summary: string,
   model: string,
@@ -1251,8 +1291,8 @@ export async function setCommentSummary(
   try {
     const now = Math.floor(Date.now() / 1000);
     await client.query(
-      `UPDATE video_comments SET summary = $1, summary_model = $2, updated_at = $3 WHERE video_id = $4`,
-      [summary, model, now, videoId],
+      `UPDATE video_comments SET summary = $1, summary_model = $2, updated_at = $3 WHERE user_id = $4 AND video_id = $5`,
+      [summary, model, now, userId, videoId],
     );
   } finally {
     client.release();
@@ -1260,7 +1300,7 @@ export async function setCommentSummary(
 }
 
 /** Fetch a video's community pulse row, or null when comments haven't been fetched yet. */
-export async function getCommunityPulse(videoId: string): Promise<CommunityPulse | null> {
+export async function getCommunityPulse(userId: string, videoId: string): Promise<CommunityPulse | null> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -1269,7 +1309,10 @@ export async function getCommunityPulse(videoId: string): Promise<CommunityPulse
       fetched_at: number;
       summary: string | null;
       summary_model: string | null;
-    }>('SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE video_id = $1', [videoId]);
+    }>(
+      'SELECT video_id, comments, fetched_at, summary, summary_model FROM video_comments WHERE user_id = $1 AND video_id = $2',
+      [userId, videoId],
+    );
     if (rows.length === 0) return null;
     const row = rows[0];
     let comments: VideoComment[] = [];
@@ -1296,7 +1339,7 @@ export async function getCommunityPulse(videoId: string): Promise<CommunityPulse
  * follow-ups without a recognizable video id are skipped (they are external
  * links or references to channels without a concrete video).
  */
-export async function persistVideoReferences(sourceVideoId: string, followUps: FollowUp[]): Promise<void> {
+export async function persistVideoReferences(userId: string, sourceVideoId: string, followUps: FollowUp[]): Promise<void> {
   // Filter to follow-ups whose video_id looks like a YouTube video id
   // (11 chars, base64-url alphabet). This matches what the LLM is prompted to
   // produce and avoids storing junk edges.
@@ -1308,20 +1351,23 @@ export async function persistVideoReferences(sourceVideoId: string, followUps: F
   try {
     const now = Math.floor(Date.now() / 1000);
     // Replace strategy: delete existing outgoing edges, then insert fresh ones.
-    await client.query('DELETE FROM video_references WHERE source_video_id = $1', [sourceVideoId]);
+    await client.query(
+      'DELETE FROM video_references WHERE user_id = $1 AND source_video_id = $2',
+      [userId, sourceVideoId],
+    );
     if (edges.length === 0) return;
     // Single multi-row INSERT — one round-trip instead of one per edge.
     // target_channel_id is always NULL (video edges only); reference_type is
     // always 'video' in the current persistence path.
     const values: string[] = [];
-    const params: (string | number)[] = [];
+    const params: (string | number)[] = [userId, sourceVideoId];
     for (const f of edges) {
       const base = params.length;
-      values.push(`($${base + 1}, $${base + 2}, $${base + 3}, NULL, 'video', $${base + 4}, $${base + 5})`);
-      params.push(newId(), sourceVideoId, f.video_id, f.reason, now);
+      values.push(`($1, $${base + 1}, $2, $${base + 2}, NULL, 'video', $${base + 3}, $${base + 4})`);
+      params.push(newId(), f.video_id, f.reason, now);
     }
     await client.query(
-      `INSERT INTO video_references (id, source_video_id, target_video_id, target_channel_id, reference_type, context, created_at)
+      `INSERT INTO video_references (id, user_id, source_video_id, target_video_id, target_channel_id, reference_type, context, created_at)
        VALUES ${values.join(', ')}`,
       params,
     );
@@ -1334,7 +1380,7 @@ export async function persistVideoReferences(sourceVideoId: string, followUps: F
  * Outgoing reference edges for a video (videos this video's summary cited),
  * hydrated with target video + channel titles for display.
  */
-export async function getOutgoingReferences(sourceVideoId: string): Promise<VideoReferenceWithTarget[]> {
+export async function getOutgoingReferences(userId: string, sourceVideoId: string): Promise<VideoReferenceWithTarget[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -1354,11 +1400,11 @@ export async function getOutgoingReferences(sourceVideoId: string): Promise<Vide
               v.title AS target_video_title, v.thumbnail_url AS target_video_thumbnail,
               c.title AS target_channel_title
        FROM video_references r
-       LEFT JOIN videos v ON v.video_id = r.target_video_id
-       LEFT JOIN channels c ON c.channel_id = v.channel_id
-       WHERE r.source_video_id = $1
+       LEFT JOIN videos v ON v.user_id = r.user_id AND v.video_id = r.target_video_id
+       LEFT JOIN channels c ON c.user_id = r.user_id AND c.channel_id = v.channel_id
+       WHERE r.user_id = $1 AND r.source_video_id = $2
        ORDER BY r.created_at DESC`,
-      [sourceVideoId],
+      [userId, sourceVideoId],
     );
     return rows.map(r => ({
       id: r.id,
@@ -1381,7 +1427,7 @@ export async function getOutgoingReferences(sourceVideoId: string): Promise<Vide
  * Incoming reference edges for a video (videos whose summaries cited this
  * video), hydrated with source video + channel titles for display.
  */
-export async function getIncomingReferences(targetVideoId: string): Promise<IncomingReference[]> {
+export async function getIncomingReferences(userId: string, targetVideoId: string): Promise<IncomingReference[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -1401,11 +1447,11 @@ export async function getIncomingReferences(targetVideoId: string): Promise<Inco
               v.title AS source_video_title, v.thumbnail_url AS source_video_thumbnail,
               c.title AS source_channel_title
        FROM video_references r
-       JOIN videos v ON v.video_id = r.source_video_id
-       JOIN channels c ON c.channel_id = v.channel_id
-       WHERE r.target_video_id = $1
+       JOIN videos v ON v.user_id = r.user_id AND v.video_id = r.source_video_id
+       JOIN channels c ON c.user_id = r.user_id AND c.channel_id = v.channel_id
+       WHERE r.user_id = $1 AND r.target_video_id = $2
        ORDER BY r.created_at DESC`,
-      [targetVideoId],
+      [userId, targetVideoId],
     );
     return rows.map(r => ({
       id: r.id,
@@ -1431,7 +1477,7 @@ export async function getIncomingReferences(targetVideoId: string): Promise<Inco
  * channel is subscribed — so the graph reflects the user's own subscription
  * graph, not the whole internet.
  */
-export async function getMostReferencedVideos(limit = 10): Promise<MostReferencedVideo[]> {
+export async function getMostReferencedVideos(userId: string, limit = 10): Promise<MostReferencedVideo[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -1449,16 +1495,17 @@ export async function getMostReferencedVideos(limit = 10): Promise<MostReference
               c.title AS channel_title,
               COUNT(DISTINCT r.source_video_id) AS reference_count
        FROM video_references r
-       JOIN videos v ON v.video_id = r.target_video_id
-       JOIN channels c ON c.channel_id = v.channel_id
-       JOIN videos sv ON sv.video_id = r.source_video_id
-       JOIN channels sc ON sc.channel_id = sv.channel_id
-       WHERE r.target_video_id IS NOT NULL
+       JOIN videos v ON v.user_id = r.user_id AND v.video_id = r.target_video_id
+       JOIN channels c ON c.user_id = r.user_id AND c.channel_id = v.channel_id
+       JOIN videos sv ON sv.user_id = r.user_id AND sv.video_id = r.source_video_id
+       JOIN channels sc ON sc.user_id = r.user_id AND sc.channel_id = sv.channel_id
+       WHERE r.user_id = $1
+         AND r.target_video_id IS NOT NULL
          AND sc.subscribed_at IS NOT NULL
        GROUP BY r.target_video_id, v.title, v.thumbnail_url, v.channel_id, v.published_at, c.title
        ORDER BY reference_count DESC, v.published_at DESC
-       LIMIT $1`,
-      [limit],
+       LIMIT $2`,
+      [userId, limit],
     );
     return rows.map(r => ({
       video_id: r.video_id,

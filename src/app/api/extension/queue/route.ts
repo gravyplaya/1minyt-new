@@ -1,7 +1,8 @@
 /**
  * TAV-68a: Summarize-Later queue — POST /api/extension/queue
  * Body: `{ url | videoId, action?: 'add' | 'remove' }` (default 'add').
- * Auth: `Authorization: Bearer <EXTENSION_API_KEY>`.
+ * Auth: `Authorization: Bearer <EXTENSION_API_KEY>` + the app session cookie
+ * (TAV-68) — the queue belongs to the signed-in user.
  *
  * 'add' mirrors the "Summarize Later" button from the extension: it first
  * ensures the videos row exists (ingest-on-demand — `summarize_queue.video_id`
@@ -16,6 +17,7 @@ import {
   extensionJson,
   extensionPreflight,
   guardExtensionRequest,
+  requireExtensionUser,
   resolveExtensionVideoId,
 } from '@/lib/extension-api';
 
@@ -25,6 +27,9 @@ export const maxDuration = 120;
 export async function POST(req: Request) {
   const denied = guardExtensionRequest(req);
   if (denied) return denied;
+
+  const { user, denied: noSession } = await requireExtensionUser(req);
+  if (noSession) return noSession;
 
   let body: { url?: string; videoId?: string; action?: 'add' | 'remove' };
   try {
@@ -46,10 +51,12 @@ export async function POST(req: Request) {
       return extensionJson(req, outcome, outcome.ok ? 200 : 400);
     }
 
-    // Ingest-on-demand for videos the library has never seen.
-    const existing = await getVideo(videoId);
+    // Ingest-on-demand for videos the library has never seen. The actions
+    // below resolve the same session user internally; direct repo/ingest
+    // calls take the user id explicitly (TAV-68 scoping).
+    const existing = await getVideo(user.id, videoId);
     if (!existing) {
-      const ingested = await ingestVideoById(videoId);
+      const ingested = await ingestVideoById(user.id, videoId);
       if (!ingested.ok) {
         return extensionJson(
           req,

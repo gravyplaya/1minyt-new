@@ -66,6 +66,10 @@ async function requireSettings(): Promise<Settings> {
  * server-side failures; resolves to the parsed `{ ok: true, ... }` body on
  * success. A route returning `ok: false` (e.g. 4xx with a friendly message)
  * also throws ApiError carrying that message.
+ *
+ * `credentials: 'include'` ships the app's session cookie (TAV-68 multi-user):
+ * the API key authenticates the extension, the cookie picks *whose* library
+ * the call touches. Signed-out browsers get a friendly 401 from the server.
  */
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { serverUrl, apiKey } = await requireSettings();
@@ -74,6 +78,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   try {
     res = await fetch(`${serverUrl}${path}`, {
       ...init,
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,

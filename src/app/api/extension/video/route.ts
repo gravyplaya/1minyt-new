@@ -1,6 +1,7 @@
 /**
  * TAV-68a: Library state for one video — GET /api/extension/video?id=<videoId>
- * Auth: `Authorization: Bearer <EXTENSION_API_KEY>`.
+ * Auth: `Authorization: Bearer <EXTENSION_API_KEY>` + the app session cookie
+ * (TAV-68) — the badge reflects the signed-in user's library.
  *
  * Lets the extension badge the YouTube watch page (Saved? Summarized?) and
  * render the cached summary without re-running anything. The transcript text
@@ -12,7 +13,13 @@
  */
 
 import { getVideoWithSummary } from '@/lib/video-repo';
-import { extensionJson, extensionPreflight, extensionSummary, guardExtensionRequest } from '@/lib/extension-api';
+import {
+  extensionJson,
+  extensionPreflight,
+  extensionSummary,
+  guardExtensionRequest,
+  requireExtensionUser,
+} from '@/lib/extension-api';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,13 +29,16 @@ export async function GET(req: Request) {
   const denied = guardExtensionRequest(req);
   if (denied) return denied;
 
+  const { user, denied: noSession } = await requireExtensionUser(req);
+  if (noSession) return noSession;
+
   const videoId = new URL(req.url).searchParams.get('id')?.trim() ?? '';
   if (!VIDEO_ID_RE.test(videoId)) {
     return extensionJson(req, { ok: false, error: 'Missing or invalid video id.' }, 400);
   }
 
   try {
-    const video = await getVideoWithSummary(videoId);
+    const video = await getVideoWithSummary(user.id, videoId);
     if (!video) {
       return extensionJson(req, { ok: true, saved: false, video: null, summary: null, chapters: null });
     }

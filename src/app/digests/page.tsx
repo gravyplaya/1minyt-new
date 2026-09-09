@@ -3,7 +3,7 @@ import { AppShell } from '../_components/AppShell';
 import { GenerateDigestButton } from '../_components/GenerateDigestButton';
 import { DigestVideoRow } from '../_components/DigestVideoRow';
 import { latestDigestWithVideos, listRecentDigests } from '@/lib/digest';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser } from '@/lib/auth';
 import { formatDate, formatRelative } from '../_lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -14,15 +14,13 @@ export const metadata = {
 };
 
 export default async function DigestsPage() {
-  const [connected, profile, latest, history] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    latestDigestWithVideos(),
-    listRecentDigests(10),
-  ]);
+  const { user, connected } = await resolvePageUser();
+  const [latest, history] = connected && user
+    ? await Promise.all([latestDigestWithVideos(user.id), listRecentDigests(user.id, 10)])
+    : [null, []] as const;
 
   return (
-    <AppShell tab="settings" settingsActive="digests" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+    <AppShell tab="settings" settingsActive="digests" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📋 New-video digest</h1>
