@@ -76,15 +76,24 @@ export function guardExtensionRequest(req: Request): NextResponse | null {
  * authenticates the *extension*; this authenticates the *person* — the app
  * session cookie sent along with the request (the extension passes
  * credentials). Returns the signed-in user plus `denied: null`, or
- * `user: null` plus a ready-to-send 401 response when there is no session, so
- * data routes never leak into the __anon bucket or trigger requireUserId's
+ * `user: null` plus a ready-to-send error response (401 when there is no
+ * session, 500 with the DB error otherwise — the session lookup runs outside
+ * the routes' try/catch, so a database hiccup must be folded into the JSON
+ * contract here or the extension would surface an opaque non-JSON 500 page).
+ * Data routes never leak into the __anon bucket or trigger requireUserId's
  * redirect from a route handler. Caller shape matches guardExtensionRequest:
  * `const { user, denied } = await requireExtensionUser(req); if (denied) return denied;`
  */
 export async function requireExtensionUser(
   req: Request,
 ): Promise<{ user: SessionUser; denied: null } | { user: null; denied: NextResponse }> {
-  const user = await getSessionUser();
+  let user: SessionUser | null;
+  try {
+    user = await getSessionUser();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { user: null, denied: extensionJson(req, { ok: false, error: msg }, 500) };
+  }
   if (!user) {
     return {
       user: null,
