@@ -472,6 +472,15 @@ export const SCHEMA_STATEMENTS: string[] = [
   // the presentation regardless of what the heuristic guesses. Additive ALTER
   // because CREATE TABLE IF NOT EXISTS won't add columns to an existing table.
   `ALTER TABLE videos ADD COLUMN IF NOT EXISTS video_pref TEXT`,
+
+  // ----- TAV-68: int4 overflow on viral view counts ------------------------------
+  //
+  // videos.view_count was born INTEGER (max 2,147,483,647). Mega-viral videos
+  // exceed that (Gangnam Style ≈ 6B) and blew up the extension's queue-by-URL
+  // ingest with `value out of range for type integer`. Widen to BIGINT — a
+  // re-run of the same TYPE change is a no-op, so it's safe on every boot.
+  // Found by the TAV-68 extension smoke test (SMOKE_VIDEO_ID=9bZkp7q19f0).
+  `ALTER TABLE videos ALTER COLUMN view_count TYPE BIGINT`,
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

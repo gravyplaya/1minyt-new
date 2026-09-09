@@ -5,7 +5,7 @@ import nextTs from 'eslint-config-next/typescript';
 const eslintConfig = [
   ...nextVitals,
   ...nextTs,
-  globalIgnores(['.next/**', 'out/**', 'next-env.d.ts']),
+  globalIgnores(['.next/**', 'out/**', 'next-env.d.ts', 'extension/.output/**', 'extension/.wxt/**', 'extension/node_modules/**']),
   {
     rules: {
       // Pre-existing patterns — softening to pass upgrade cleanly

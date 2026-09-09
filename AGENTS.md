@@ -8,11 +8,14 @@ Guidance for AI agents (and humans) working in this repo.
 |------|---------|
 | Install | `pnpm install` |
 | Dev server | `pnpm dev` |
-| Typecheck | `pnpm typecheck` (tsc --noEmit) |
+| Typecheck | `pnpm typecheck` (tsc --noEmit, includes `extension/`) |
 | Lint | `pnpm run lint` |
 | Production build | `pnpm run build` |
 | DB smoke test | `pnpm smoke` |
 | Headless subscription sync | `pnpm sync` |
+| Extension dev (HMR) | `pnpm -C extension dev` |
+| Extension build (MV3) | `pnpm -C extension build` → `extension/dist/chrome-mv3` |
+| Extension zip (store) | `pnpm -C extension zip` |
 
 Always run `pnpm typecheck` and `pnpm run lint` after changes. Never use npm/yarn — this project uses pnpm.
 
@@ -41,13 +44,17 @@ lib/library-chat-repo.ts  /chat threads + channel dossiers (G)
 lib/dossier.ts  channel "memory" orchestration (map-reduce over summaries)
 lib/topics.ts   topic graph for /topics mind map (I)
 lib/summarize.ts  all LLM synthesis: video, playlist, comments, channel dossier
+lib/extension-api.ts  shared auth/CORS/response helpers for /api/extension/* (TAV-68a)
+app/api/extension/  HTTP surface the browser extension calls (ingest, video, summarize, queue, search, health)
+extension/      WXT MV3 workspace package (Chrome + Brave): content.ts watch-page pill, popup, options, background.ts message router + context menus
 ```
 
 Server actions live in `src/app/actions.ts` — one section per TAV ticket. Pages never import lib logic directly when an action exists; client components call actions via `useTransition`.
 
 ## Conventions
 
-- **Tickets:** features carry a `TAV-N` id. Current highest: TAV-67.
+- **Tickets:** features carry a `TAV-N` id. Current highest: TAV-68.
+- **Extension:** `extension/` is a pnpm workspace package (WXT, MV3, Chrome + Brave — one build covers both since Brave is Chromium). Its service worker is the ONLY network client for the app's `/api/extension/*` surface; content script/popup/options message it via `lib/messages.ts`. Auth is a shared secret: `EXTENSION_API_KEY` env on the app, sent as `Authorization: Bearer`; unset = the whole extension API 404/503s. New endpoints go in `src/app/api/extension/` + wrappers in `extension/lib/api.ts` + a message type in `extension/lib/messages.ts`; response types are mirrored by hand in `extension/lib/types.ts`.
 - **Schema migrations:** append `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements to `SCHEMA_STATEMENTS` — never edit existing table definitions in place, existing DBs won't re-run them.
 - **Embeddings:** local hashing vectorizer (`lib/embeddings.ts`), stored as BYTEA `Float32Array` in `transcript_chunks` with a `chunk_type` of `'transcript'` or `'summary'`. Cosine similarity is computed in JS — fine at hundreds-to-thousands of chunks; revisit if the corpus grows 10x.
 - **LLM calls:** always via `https://openrouter.ai/api/v1/chat/completions`, key `OPENROUTER_API_KEY`, model `SUMMARY_MODEL`/`CHAT_MODEL` env override, default `openrouter/free`. Structured output uses `response_format: { type: 'json_object' }` + fence-tolerant parsing.
@@ -66,6 +73,7 @@ Server actions live in `src/app/actions.ts` — one section per TAV ticket. Page
 | Channel memory dossiers | TAV-64 (G) | `dossier.ts`, `summarize.synthesizeChannelDossier` | /chat (scoped to channel) |
 | Topic mind map | TAV-66 (I) | `topics.ts` | /topics, TopicGraphView |
 | Paste a YouTube URL | TAV-67 | `youtube-url.ts`, `video-ingest.ts` (Innertube path = no sign-in) | HeaderBar PasteUrlBox, landing hero, /watch |
+| Browser extension | TAV-68 (a–f) | `src/app/api/extension/*` + `src/lib/extension-api.ts` | `extension/` — watch-page pill (content.ts), popup, options, context menus |
 
 ## Notes for future work
 
