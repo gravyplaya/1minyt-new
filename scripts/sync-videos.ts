@@ -8,6 +8,9 @@
  * — the API is only touched to enrich newly-detected video ids with duration,
  * tags, and category.
  *
+ * TAV-68: multi-user — iterates every connected user's channel list, each
+ * scoped to that user's library.
+ *
  * Suggested crontab (hourly):
  *   0 * * * *  cd /path/to/1minyt && pnpm run sync:videos >> /tmp/1minyt-videos.log 2>&1
  *
@@ -16,30 +19,42 @@
  */
 import { listChannels } from '../src/lib/repo';
 import { syncChannelVideos } from '../src/lib/video-sync';
+import { listConnectedUserIds } from '../src/lib/tokens';
 import { closePool } from '../src/lib/db';
 
 async function main() {
-  const channels = await listChannels({ hidden: false, includeMusic: true, limit: 500 });
-  console.log(`Syncing videos for ${channels.length} channel(s)...`);
+  const userIds = await listConnectedUserIds();
+  if (userIds.length === 0) {
+    console.log('No connected users — nothing to sync.');
+    return;
+  }
 
   let totalFetched = 0;
   let rssChannels = 0;
+  let channelCount = 0;
   const errors: string[] = [];
 
-  for (const channel of channels) {
-    const result = await syncChannelVideos(channel.channel_id, 15);
-    totalFetched += result.fetched;
-    if (result.rss) rssChannels += 1;
-    if (result.errors.length > 0) {
-      errors.push(`${channel.title}: ${result.errors.join('; ')}`);
+  for (const userId of userIds) {
+    const channels = await listChannels(userId, { hidden: false, includeMusic: true, limit: 500 });
+    console.log(`user ${userId}: syncing videos for ${channels.length} channel(s)...`);
+    channelCount += channels.length;
+
+    for (const channel of channels) {
+      const result = await syncChannelVideos(userId, channel.channel_id, 15);
+      totalFetched += result.fetched;
+      if (result.rss) rssChannels += 1;
+      if (result.errors.length > 0) {
+        errors.push(`user ${userId} · ${channel.title}: ${result.errors.join('; ')}`);
+      }
     }
   }
 
   const summary = {
-    channels: channels.length,
+    users: userIds.length,
+    channels: channelCount,
     fetched: totalFetched,
     rssChannels,
-    apiFallbackChannels: channels.length - rssChannels,
+    apiFallbackChannels: channelCount - rssChannels,
     errors,
   };
   console.log(JSON.stringify(summary, null, 2));

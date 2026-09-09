@@ -14,7 +14,7 @@ import { MostReferencedSection } from '../../_components/MostReferencedSection';
 import { ExportButton } from '../../_components/ExportButton';
 import { QueueChannelButton } from '../../_components/QueueChannelButton';
 import { formatCount, formatRelative, youtubeChannelUrl } from '../../_lib/format';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser, ANON_USER_ID } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,25 +24,27 @@ interface Props {
 
 export default async function ChannelPage({ params }: Props) {
   const { id } = await params;
-  const channel = await getChannel(id);
+  const { user, connected } = await resolvePageUser();
+  // Channel pages resolve for signed-out visitors too (anonymous ingests,
+  // TAV-67) — scoped to the __anon bucket so only public cached content shows.
+  const scopedUserId = user?.id ?? ANON_USER_ID;
+  const channel = await getChannel(scopedUserId, id);
   if (!channel) notFound();
 
   // TAV-63: the Queue-this-channel button pins the N most-recent *unwatched*
   // videos (the TAV-61 spec), so we fetch a separate unwatched list for its
   // video ids. `videos` (for VideosPanel) stays unfiltered so the panel still
   // shows all recent uploads regardless of triage state.
-  const [folders, tags, connected, profile, videos, unwatchedForQueue, playlists] = await Promise.all([
-    listFolders(),
-    listTags(),
-    isConnected(),
-    getUserProfile(),
-    listVideosByChannel(channel.channel_id, 30),
-    listVideosByChannel(channel.channel_id, 30, { excludeSeen: true }),
-    listChannelPlaylists(channel.channel_id),
+  const [folders, tags, videos, unwatchedForQueue, playlists] = await Promise.all([
+    connected && user ? listFolders(user.id) : Promise.resolve([]),
+    connected && user ? listTags(user.id) : Promise.resolve([]),
+    listVideosByChannel(scopedUserId, channel.channel_id, 30),
+    listVideosByChannel(scopedUserId, channel.channel_id, 30, { excludeSeen: true }),
+    listChannelPlaylists(scopedUserId, channel.channel_id),
   ]);
 
   return (
-    <AppShell tab="channels" noRail connected={connected} profile={profile} mainStyle={{ maxWidth: 1200, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="channels" noRail connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 1200, margin: '0 auto', width: '100%' }}>
       <header className="channel-header" style={{ display: 'flex', gap: 18, alignItems: 'flex-start', marginBottom: 28 }}>
           {channel.thumbnail_url ? (
             <Image

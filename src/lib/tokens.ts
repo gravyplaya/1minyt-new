@@ -1,8 +1,8 @@
 /**
- * OAuth tokens persist in Postgres so the user only has to authorize once.
+ * OAuth tokens persist in Postgres so each user only has to authorize once.
  *
- * The user_id is hardcoded to "me" because this is a personal-MVP single-user
- * app. Phase 2 (multi-user) will swap this for a real users table.
+ * TAV-68: keyed by the real user id (users.id — see lib/auth.ts). Callers
+ * must pass the id explicitly; there is no default user anymore.
  */
 
 import { getDb } from './db';
@@ -71,7 +71,7 @@ export async function clearTokens(userId: string): Promise<void> {
   }
 }
 
-export async function isConnected(userId = 'me'): Promise<boolean> {
+export async function isConnected(userId: string): Promise<boolean> {
   const tokens = await loadTokens(userId);
   return tokens?.refresh_token ? true : false;
 }
@@ -79,7 +79,7 @@ export async function isConnected(userId = 'me'): Promise<boolean> {
 /**
  * Return an access token, refreshing if it's within 60s of expiry.
  */
-export async function getValidAccessToken(userId = 'me'): Promise<string> {
+export async function getValidAccessToken(userId: string): Promise<string> {
   const tokens = await loadTokens(userId);
   if (!tokens) throw new Error('Not connected — authorize first');
   const nowSec = Math.floor(Date.now() / 1000);
@@ -95,8 +95,25 @@ export async function getValidAccessToken(userId = 'me'): Promise<string> {
   return refreshed.access_token;
 }
 
-export async function getUserProfile(userId = 'me'): Promise<UserProfile | null> {
+export async function getUserProfile(userId: string): Promise<UserProfile | null> {
   const tokens = await loadTokens(userId);
   if (!tokens) return null;
   return { displayName: tokens.display_name, avatarUrl: tokens.avatar_url };
+}
+
+/**
+ * TAV-68: every user with a stored refresh token. Headless sync (pnpm sync,
+ * cron POST /api/sync) iterates these — each user's subscriptions sync
+ * independently with their own token.
+ */
+export async function listConnectedUserIds(): Promise<string[]> {
+  const client = await getDb();
+  try {
+    const { rows } = await client.query<{ user_id: string }>(
+      'SELECT user_id FROM oauth_tokens WHERE refresh_token IS NOT NULL',
+    );
+    return rows.map(r => r.user_id);
+  } finally {
+    client.release();
+  }
 }

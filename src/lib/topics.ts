@@ -23,14 +23,17 @@ const MAX_EDGES = 150;
 const VIDEOS_PER_NODE = 8;
 
 /**
- * Build the topic graph from all cached summaries.
+ * Build the topic graph from all cached summaries. TAV-68: scoped to one
+ * user's library.
  */
-export async function buildTopicGraph(): Promise<TopicGraph> {
+export async function buildTopicGraph(userId: string): Promise<TopicGraph> {
   const { rows } = await query(
     `SELECT s.topics, v.video_id, v.title, v.channel_id, c.title AS channel_title
      FROM summaries s
-     JOIN videos v   ON v.video_id = s.video_id
-     JOIN channels c ON c.channel_id = v.channel_id`,
+     JOIN videos v   ON v.user_id = s.user_id AND v.video_id = s.video_id
+     JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+     WHERE s.user_id = $1`,
+    [userId],
   );
 
   /** topic → videos carrying it */

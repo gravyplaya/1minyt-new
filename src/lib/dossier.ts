@@ -22,18 +22,18 @@ const MIN_SUMMARIES = 2;
 
 /**
  * Generate (or regenerate) the dossier for one channel from its cached
- * summaries. Returns the saved dossier.
+ * summaries. Returns the saved dossier. TAV-68: scoped to the owner.
  */
-export async function generateChannelDossier(channelId: string): Promise<ChannelDossier> {
-  const channel = await getChannel(channelId);
+export async function generateChannelDossier(userId: string, channelId: string): Promise<ChannelDossier> {
+  const channel = await getChannel(userId, channelId);
   if (!channel) throw new Error('Channel not found.');
 
-  const videos = await listVideosByChannel(channelId, 100);
+  const videos = await listVideosByChannel(userId, channelId, 100);
   if (videos.length === 0) {
     throw new Error('No cached videos for this channel. Refresh videos first.');
   }
 
-  const summaryMap = await latestSummariesByVideoIds(videos.map(v => v.video_id));
+  const summaryMap = await latestSummariesByVideoIds(userId, videos.map(v => v.video_id));
   const inputs = videos
     .map(v => {
       const s = summaryMap.get(v.video_id);
@@ -51,7 +51,7 @@ export async function generateChannelDossier(channelId: string): Promise<Channel
     videoSummaries: inputs,
   });
 
-  await saveDossier({
+  await saveDossier(userId, {
     channel_id: channelId,
     model: result.model,
     dossier: result.dossier,
@@ -60,12 +60,12 @@ export async function generateChannelDossier(channelId: string): Promise<Channel
     token_count: result.tokenCount,
   });
 
-  const saved = await getDossier(channelId);
+  const saved = await getDossier(userId, channelId);
   if (!saved) throw new Error('Dossier was saved but could not be read back.');
   return saved;
 }
 
 /** Read a channel's dossier, or null when it hasn't been generated yet. */
-export async function loadDossier(channelId: string): Promise<ChannelDossier | null> {
-  return getDossier(channelId);
+export async function loadDossier(userId: string, channelId: string): Promise<ChannelDossier | null> {
+  return getDossier(userId, channelId);
 }

@@ -1,7 +1,17 @@
 'use server';
 
+/**
+ * TAV-68: every action resolves its user from the session cookie before
+ * touching data. Actions that touch personal state or spend LLM tokens use
+ * requireUserId() (signed-out callers are bounced to the landing page).
+ * Anonymous-tolerant actions (paste-a-URL, transcript/segment reads that the
+ * /watch player needs) use getScopedUserId() — signed-out visitors land in
+ * the shared '__anon' bucket.
+ */
+
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { getSessionUser, requireUserId, getScopedUserId, destroySession } from '@/lib/auth';
 import {
   createFolder,
   createTag,
@@ -17,7 +27,7 @@ import {
   setChannelTags,
 } from '@/lib/repo';
 import { syncSubscriptions } from '@/lib/sync';
-import { clearTokens } from '@/lib/tokens';
+import { clearTokens, getValidAccessToken } from '@/lib/tokens';
 import { syncChannelVideos } from '@/lib/video-sync';
 import { getVideo, getVideoWithSummary, listRecentUploadIds, listVideosByChannel, saveSummary, setTranscript, setTranscriptStatus, saveChatMessage, listChatMessages, toggleBookmark, saveChapters, upsertVideoComments, setCommentSummary, getCommunityPulse, upsertVideo, persistVideoReferences, getOutgoingReferences, getIncomingReferences, getMostReferencedVideos, toggleVideoLike, recordVideoPlay } from '@/lib/video-repo';
 import { fetchTranscript } from '@/lib/transcript';
@@ -25,7 +35,6 @@ import { isWhisperEnabled } from '@/lib/whisper';
 import { summarizeVideo, summarizeComments } from '@/lib/summarize';
 import { fetchTopComments, fetchChannelPlaylists, fetchPlaylistVideos } from '@/lib/youtube';
 import { searchChannelCatalog } from '@/lib/channel-search';
-import { getValidAccessToken } from '@/lib/tokens';
 import { detectChapters } from '@/lib/chapters';
 import { indexVideo, indexSummary, isIndexed, chunkCount, searchAcross, getSegments } from '@/lib/vector-store';
 import { chatWithVideo } from '@/lib/chat';
@@ -39,7 +48,8 @@ import { parseYouTubeUrl } from '@/lib/youtube-url';
 import { ingestVideoById } from '@/lib/video-ingest';
 
 export async function triggerSyncAction() {
-  const result = await syncSubscriptions();
+  const userId = await requireUserId();
+  const result = await syncSubscriptions(userId);
   revalidatePath('/');
   revalidatePath('/music');
   revalidatePath('/unfiled');
@@ -49,75 +59,102 @@ export async function triggerSyncAction() {
   return result;
 }
 
+/**
+ * TAV-68: end the session only. The YouTube connection (oauth_tokens) is kept
+ * so "Sign in" again is instant. Use disconnectAction to revoke the token.
+ */
+export async function signOutAction() {
+  await destroySession();
+  revalidatePath('/');
+  redirect('/');
+}
+
+/**
+ * TAV-68: revoke the signed-in user's YouTube token. The session stays open —
+ * the user can browse cached data and re-connect any time.
+ */
 export async function disconnectAction() {
-  await clearTokens('me');
+  const userId = await requireUserId();
+  await clearTokens(userId);
   revalidatePath('/');
   redirect('/');
 }
 
 export async function toggleHiddenAction(channelId: string, hidden: boolean) {
-  await setChannelHidden(channelId, hidden);
+  const userId = await requireUserId();
+  await setChannelHidden(userId, channelId, hidden);
   revalidatePath(`/c/${channelId}`);
   revalidatePath('/');
 }
 
 export async function setMusicFlagAction(channelId: string, flag: 0 | 1 | 2) {
-  await setChannelMusicFlag(channelId, flag);
+  const userId = await requireUserId();
+  await setChannelMusicFlag(userId, channelId, flag);
   revalidatePath(`/c/${channelId}`);
   revalidatePath('/');
 }
 
 export async function setNotesAction(channelId: string, notes: string) {
-  await setChannelNotes(channelId, notes);
+  const userId = await requireUserId();
+  await setChannelNotes(userId, channelId, notes);
   revalidatePath(`/c/${channelId}`);
 }
 
 export async function deleteChannelAction(channelId: string) {
-  await deleteChannel(channelId);
+  const userId = await requireUserId();
+  await deleteChannel(userId, channelId);
   revalidatePath('/');
   redirect('/');
 }
 
 export async function createFolderAction(name: string, color?: string) {
-  const f = await createFolder(name, color);
+  const userId = await requireUserId();
+  const f = await createFolder(userId, name, color);
   revalidatePath('/');
   return f;
 }
 
 export async function renameFolderAction(id: string, name: string) {
-  await renameFolder(id, name);
+  const userId = await requireUserId();
+  await renameFolder(userId, id, name);
   revalidatePath('/');
 }
 
 export async function deleteFolderAction(id: string) {
-  await deleteFolder(id);
+  const userId = await requireUserId();
+  await deleteFolder(userId, id);
   revalidatePath('/');
 }
 
 export async function createTagAction(name: string, color?: string) {
-  const t = await createTag(name, color);
+  const userId = await requireUserId();
+  const t = await createTag(userId, name, color);
   revalidatePath('/');
   return t;
 }
 
 export async function renameTagAction(id: string, name: string) {
-  await renameTag(id, name);
+  const userId = await requireUserId();
+  await renameTag(userId, id, name);
   revalidatePath('/');
 }
 
 export async function deleteTagAction(id: string) {
-  await deleteTag(id);
+  const userId = await requireUserId();
+  await deleteTag(userId, id);
   revalidatePath('/');
 }
 
 export async function setChannelFoldersAction(channelId: string, folderIds: string[]) {
-  await setChannelFolders(channelId, folderIds);
+  const userId = await requireUserId();
+  await setChannelFolders(userId, channelId, folderIds);
   revalidatePath(`/c/${channelId}`);
   revalidatePath('/');
 }
 
 export async function setChannelTagsAction(channelId: string, tagIds: string[]) {
-  await setChannelTags(channelId, tagIds);
+  const userId = await requireUserId();
+  await setChannelTags(userId, channelId, tagIds);
   revalidatePath(`/c/${channelId}`);
   revalidatePath('/');
 }
@@ -125,12 +162,13 @@ export async function setChannelTagsAction(channelId: string, tagIds: string[]) 
 // ----- TAV-4: 1-Click Instant Summaries -------------------------------------
 
 export async function refreshChannelVideosAction(channelId: string, max = 30): Promise<VideoWithSummary[]> {
-  const result = await syncChannelVideos(channelId, max);
+  const userId = await requireUserId();
+  const result = await syncChannelVideos(userId, channelId, max);
   if (result.errors.length > 0) {
     throw new Error(result.errors.join('; '));
   }
   const { listVideosByChannel } = await import('@/lib/video-repo');
-  return listVideosByChannel(channelId, max);
+  return listVideosByChannel(userId, channelId, max);
 }
 
 export interface TranscriptOutcome {
@@ -147,8 +185,11 @@ export interface TranscriptOutcome {
 }
 
 export async function fetchTranscriptAction(videoId: string): Promise<TranscriptOutcome> {
+  // Anonymous-tolerant (TAV-67/TAV-68): signed-out visitors share the __anon
+  // bucket; the transcript fetch itself costs no tokens.
+  const userId = await getScopedUserId();
   try {
-    const video = await getVideo(videoId);
+    const video = await getVideo(userId, videoId);
     if (!video) return { ok: false, videoId, error: 'Video not found. Refresh videos first.' };
 
     // Return cached transcript if we already have one.
@@ -158,7 +199,7 @@ export async function fetchTranscriptAction(videoId: string): Promise<Transcript
 
     const fetched = await fetchTranscript(videoId);
     if (!fetched) {
-      await setTranscriptStatus(videoId, 'unavailable');
+      await setTranscriptStatus(userId, videoId, 'unavailable');
       const whisperAttempted = isWhisperEnabled();
       return {
         ok: false,
@@ -173,7 +214,7 @@ export async function fetchTranscriptAction(videoId: string): Promise<Transcript
     // Map the fetch source to the persisted transcript source:
     // timedtext + supadata + yt-dlp → 'youtube'; whisper → 'whisper'.
     const source: TranscriptSource = fetched.source === 'whisper' ? 'whisper' : 'youtube';
-    await setTranscript(videoId, fetched.text, source);
+    await setTranscript(userId, videoId, fetched.text, source);
     return { ok: true, videoId, transcript: fetched.text, source: fetched.source, transcriptSource: source };
   } catch (err) {
     return { ok: false, videoId, error: friendlyError(err) };
@@ -192,8 +233,9 @@ export interface SummarizeOutcome {
 }
 
 export async function summarizeVideoAction(videoId: string): Promise<SummarizeOutcome> {
+  const userId = await requireUserId();
   try {
-    const video = await getVideo(videoId);
+    const video = await getVideo(userId, videoId);
     if (!video) return { ok: false, videoId, error: 'Video not found. Refresh videos first.' };
 
     const transcript = video.transcript;
@@ -202,8 +244,8 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
     }
 
     const { getChannel } = await import('@/lib/repo');
-    const channel = await getChannel(video.channel_id);
-    const uploads = (await listRecentUploadIds(video.channel_id, 12)).filter(u => u.video_id !== videoId);
+    const channel = await getChannel(userId, video.channel_id);
+    const uploads = (await listRecentUploadIds(userId, video.channel_id, 12)).filter(u => u.video_id !== videoId);
 
     const summary = await summarizeVideo({
       videoId,
@@ -213,7 +255,7 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
       recentUploads: uploads,
     });
 
-    const saved = await saveSummary({
+    const saved = await saveSummary(userId, {
       video_id: videoId,
       model: summary.model,
       tldr: summary.tldr,
@@ -228,7 +270,7 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
     // can build a cross-video citation graph over time. Non-fatal — a failure
     // here must not invalidate the summary.
     try {
-      await persistVideoReferences(videoId, summary.followUps);
+      await persistVideoReferences(userId, videoId, summary.followUps);
     } catch (err) {
       console.error('Video reference persistence failed (non-fatal):', err instanceof Error ? err.message : err);
     }
@@ -237,17 +279,17 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
     // not invalidate the summary — chapters are a best-effort enhancement.
     let chapters: Chapter[] | undefined;
     try {
-      const segments = await getSegments(videoId);
+      const segments = await getSegments(userId, videoId);
       if (segments.length === 0) {
         // Re-fetch transcript segments if they haven't been persisted yet.
         const fetched = await fetchTranscript(videoId);
         if (fetched?.segments && fetched.segments.length > 0) {
           const { saveSegments } = await import('@/lib/vector-store');
-          await saveSegments(videoId, fetched.segments);
-          chapters = await runChapterDetection(videoId, video.title, fetched.segments);
+          await saveSegments(userId, videoId, fetched.segments);
+          chapters = await runChapterDetection(userId, videoId, video.title, fetched.segments);
         }
       } else {
-        chapters = await runChapterDetection(videoId, video.title, segments);
+        chapters = await runChapterDetection(userId, videoId, video.title, segments);
       }
     } catch (err) {
       console.error('Chapter detection failed (non-fatal):', err instanceof Error ? err.message : err);
@@ -256,13 +298,13 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
     // TAV-20: Community Pulse — fetch top comments and summarize them alongside
     // the transcript. Failures are non-fatal: no OAuth token, comments disabled,
     // or LLM error all degrade to "no community pulse" rather than failing the run.
-    const communityPulse = await runCommunityPulse(videoId, video.title, saved.tldr);
+    const communityPulse = await runCommunityPulse(userId, videoId, video.title, saved.tldr);
 
     // TAV-30: index the summary so searchAcross can surface this video by what
     // its summary says — without anyone having to chat with it first. Non-fatal:
     // a failure here must not invalidate the summary.
     try {
-      await indexSummary(videoId, {
+      await indexSummary(userId, videoId, {
         tldr: saved.tldr,
         key_points: saved.key_points,
         topics: saved.topics,
@@ -285,15 +327,16 @@ export async function summarizeVideoAction(videoId: string): Promise<SummarizeOu
  * community pulse row, or null when comments are unavailable/disabled.
  */
 async function runCommunityPulse(
+  userId: string,
   videoId: string,
   videoTitle: string,
   transcriptTldr: string,
 ): Promise<CommunityPulse | null> {
   try {
-    const accessToken = await getValidAccessToken();
+    const accessToken = await getValidAccessToken(userId);
     const comments = await fetchTopComments(accessToken, videoId, 20);
     if (comments.length === 0) return null;
-    await upsertVideoComments(videoId, comments);
+    await upsertVideoComments(userId, videoId, comments);
 
     try {
       const { summary, model } = await summarizeComments({
@@ -302,12 +345,12 @@ async function runCommunityPulse(
         transcriptTldr,
         comments: comments.map(c => ({ author: c.author, text: c.text, like_count: c.like_count })),
       });
-      await setCommentSummary(videoId, summary, model);
+      await setCommentSummary(userId, videoId, summary, model);
     } catch (err) {
       // Comments were fetched and stored; the summary failed. Return what we have.
       console.error('Community Pulse summary failed (non-fatal):', err instanceof Error ? err.message : err);
     }
-    return getCommunityPulse(videoId);
+    return getCommunityPulse(userId, videoId);
   } catch (err) {
     console.error('Community Pulse fetch failed (non-fatal):', err instanceof Error ? err.message : err);
     return null;
@@ -316,13 +359,14 @@ async function runCommunityPulse(
 
 /** Shared helper: call the LLM chapter detector and persist the result. */
 async function runChapterDetection(
+  userId: string,
   videoId: string,
   videoTitle: string,
   segments: TranscriptSegment[],
 ): Promise<Chapter[] | undefined> {
   const result = await detectChapters({ videoId, videoTitle, segments });
   if (result.chapters.length > 0) {
-    await saveChapters({
+    await saveChapters(userId, {
       video_id: videoId,
       chapters: result.chapters,
       model: result.model,
@@ -345,23 +389,24 @@ export interface ChaptersOutcome {
 /** Detect chapters for a video that already has a transcript. Standalone entry
  *  point for a future "Detect chapters" button or for re-running detection. */
 export async function detectChaptersAction(videoId: string): Promise<ChaptersOutcome> {
+  const userId = await requireUserId();
   try {
-    const video = await getVideo(videoId);
+    const video = await getVideo(userId, videoId);
     if (!video) return { ok: false, videoId, error: 'Video not found. Refresh videos first.' };
 
-    let segments = await getSegments(videoId);
+    let segments = await getSegments(userId, videoId);
     if (segments.length === 0) {
       const fetched = await fetchTranscript(videoId);
       if (!fetched || !fetched.segments || fetched.segments.length === 0) {
         return { ok: false, videoId, error: 'No transcript segments available for this video.' };
       }
       const { saveSegments } = await import('@/lib/vector-store');
-      await saveSegments(videoId, fetched.segments);
+      await saveSegments(userId, videoId, fetched.segments);
       segments = fetched.segments;
     }
 
     const result = await detectChapters({ videoId, videoTitle: video.title, segments });
-    await saveChapters({
+    await saveChapters(userId, {
       video_id: videoId,
       chapters: result.chapters,
       model: result.model,
@@ -379,7 +424,8 @@ export async function detectChaptersAction(videoId: string): Promise<ChaptersOut
 // ----- TAV-9: Batch summarize ------------------------------------------------
 
 export async function getUnsummarizedVideosAction(channelId: string): Promise<VideoWithSummary[]> {
-  const all = await listVideosByChannel(channelId, 30);
+  const userId = await requireUserId();
+  const all = await listVideosByChannel(userId, channelId, 30);
   // Skip videos that already have a summary or whose transcripts are unavailable.
   return all.filter(v => !v.summary && v.transcript_status !== 'unavailable');
 }
@@ -396,21 +442,31 @@ export interface BookmarkOutcome {
 
 export async function toggleVideoLikeAction(videoId: string): Promise<{ ok: boolean; liked: boolean; error?: string }> {
   try {
-    const { liked, channelId } = await toggleVideoLike(videoId);
+    const userId = await requireUserId();
+    const { liked, channelId } = await toggleVideoLike(userId, videoId);
     revalidatePath('/likes');
     if (channelId) revalidatePath(`/c/${channelId}`);
     return { ok: true, liked };
   } catch (err) { return { ok: false, liked: false, error: err instanceof Error ? err.message : String(err) }; }
 }
 
+/** Play history is personal (TAV-68) — silently skip when signed out so the
+ *  anonymous /watch player never triggers a redirect. */
 export async function recordVideoPlayAction(videoId: string, progressSeconds = 0, completed = false): Promise<{ ok: boolean; error?: string }> {
-  try { await recordVideoPlay(videoId, progressSeconds, completed); revalidatePath('/history'); return { ok: true }; }
+  try {
+    const user = await getSessionUser();
+    if (!user) return { ok: true };
+    await recordVideoPlay(user.id, videoId, progressSeconds, completed);
+    revalidatePath('/history');
+    return { ok: true };
+  }
   catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
 }
 
 export async function toggleBookmarkAction(videoId: string): Promise<BookmarkOutcome> {
   try {
-    const { bookmarked, channelId } = await toggleBookmark(videoId);
+    const userId = await requireUserId();
+    const { bookmarked, channelId } = await toggleBookmark(userId, videoId);
     if (bookmarked === null) {
       return { ok: false, videoId, bookmarked: null, error: 'No summary to bookmark yet.' };
     }
@@ -449,8 +505,9 @@ export async function setMusicVideoPrefAction(
     return { ok: false, videoId, pref: null, error: 'Invalid video preference. Use "video", "audio", or null.' };
   }
   try {
+    const userId = await requireUserId();
     const { setVideoPref } = await import('@/lib/video-repo');
-    await setVideoPref(videoId, pref);
+    await setVideoPref(userId, videoId, pref);
     revalidatePath('/music');
     return { ok: true, videoId, pref };
   } catch (err) {
@@ -471,9 +528,10 @@ export interface IndexOutcome {
 
 export async function indexVideoAction(videoId: string): Promise<IndexOutcome> {
   try {
-    const video = await getVideo(videoId);
+    const userId = await requireUserId();
+    const video = await getVideo(userId, videoId);
     if (!video) return { ok: false, videoId, chunkCount: 0, embedModel: '', error: 'Video not found. Refresh videos first.' };
-    const result = await indexVideo(videoId);
+    const result = await indexVideo(userId, videoId);
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -486,10 +544,14 @@ export interface ChatStatusOutcome {
   chunkCount: number;
 }
 
+/** Chat requires sign-in (TAV-68) — report "not indexed" when signed out so
+ *  the panel shows its sign-in prompt instead of a redirect. */
 export async function chatStatusAction(videoId: string): Promise<ChatStatusOutcome> {
+  const user = await getSessionUser();
+  if (!user) return { indexed: false, chunkCount: 0 };
   const [indexed, count] = await Promise.all([
-    isIndexed(videoId),
-    chunkCount(videoId),
+    isIndexed(user.id, videoId),
+    chunkCount(user.id, videoId),
   ]);
   return { indexed, chunkCount: count };
 }
@@ -506,22 +568,24 @@ export interface ChatWithVideoOutcome {
 
 export async function chatWithVideoAction(videoId: string, question: string): Promise<ChatWithVideoOutcome> {
   try {
-    const video = await getVideo(videoId);
+    const userId = await requireUserId();
+    const video = await getVideo(userId, videoId);
     if (!video) return { ok: false, videoId, error: 'Video not found. Refresh videos first.' };
 
     // Auto-index if not already done.
-    if (!(await isIndexed(videoId))) {
-      const idx = await indexVideo(videoId);
+    if (!(await isIndexed(userId, videoId))) {
+      const idx = await indexVideo(userId, videoId);
       if (!idx.ok) return { ok: false, videoId, error: idx.error ?? 'Failed to index video for chat.' };
     }
 
     // Load prior conversation history so follow-ups have context.
-    const history = await listChatMessages(videoId, 20);
+    const history = await listChatMessages(userId, videoId, 20);
 
     // Save the user's question first so it appears in history immediately.
-    await saveChatMessage({ video_id: videoId, role: 'user', content: question });
+    await saveChatMessage(userId, { video_id: videoId, role: 'user', content: question });
 
     const result = await chatWithVideo({
+      userId,
       videoId,
       videoTitle: video.title,
       question,
@@ -529,10 +593,10 @@ export async function chatWithVideoAction(videoId: string, question: string): Pr
     });
 
     // Persist the assistant's answer.
-    await saveChatMessage({ video_id: videoId, role: 'assistant', content: result.answer });
+    await saveChatMessage(userId, { video_id: videoId, role: 'assistant', content: result.answer });
 
     // Return the full updated message list for the UI.
-    const messages = await listChatMessages(videoId, 50);
+    const messages = await listChatMessages(userId, videoId, 50);
 
     return {
       ok: true,
@@ -548,20 +612,23 @@ export async function chatWithVideoAction(videoId: string, question: string): Pr
 }
 
 export async function loadChatHistoryAction(videoId: string): Promise<ChatMessage[]> {
-  return listChatMessages(videoId, 50);
+  const userId = await requireUserId();
+  return listChatMessages(userId, videoId, 50);
 }
 
 // ----- TAV-21: Transcript segments for embedded player -----------------------
 
 export async function getSegmentsAction(videoId: string): Promise<TranscriptSegment[]> {
+  // Anonymous-tolerant: the /watch player needs segments for seek/chapters.
+  const userId = await getScopedUserId();
   try {
-    const segments = await getSegments(videoId);
+    const segments = await getSegments(userId, videoId);
     if (segments.length > 0) return segments;
     // Segments not persisted yet — fetch transcript (caches segments as a side effect).
     const fetched = await fetchTranscript(videoId);
     if (fetched?.segments && fetched.segments.length > 0) {
       const { saveSegments } = await import('@/lib/vector-store');
-      await saveSegments(videoId, fetched.segments);
+      await saveSegments(userId, videoId, fetched.segments);
       return fetched.segments;
     }
     return [];
@@ -573,9 +640,10 @@ export async function getSegmentsAction(videoId: string): Promise<TranscriptSegm
 // ----- TAV-10: Cross-video transcript search ---------------------------------
 
 export async function searchTranscriptsAction(query: string): Promise<TranscriptSearchResult[]> {
+  const userId = await requireUserId();
   const q = query.trim();
   if (!q) return [];
-  return searchAcross(q, 20);
+  return searchAcross(userId, q, 20);
 }
 
 // ----- TAV-25: Channel back-catalog search ------------------------------------
@@ -597,7 +665,7 @@ export interface ChannelCatalogSearchOutcome {
  * cover the subset we've indexed. Returning both lets the UI present
  * "what this channel has published" alongside "what they actually said."
  *
- * `publishedAfter` is an ISO-8601 string (e.g. `2023-01-01T00:00:00Z`) used to
+ * `publishedAfter` is an ISO-8601 string (e.g. 2023-01-01T00:00:00Z) used to
  * narrow the catalog search. Pass null/undefined to search the full history.
  */
 export async function searchChannelCatalogAction(
@@ -605,10 +673,11 @@ export async function searchChannelCatalogAction(
   query: string,
   publishedAfter?: string | null,
 ): Promise<ChannelCatalogSearchOutcome> {
+  const userId = await requireUserId();
   const q = query.trim();
   if (!q) return { ok: true, channelId, catalog: [], transcripts: [] };
   try {
-    const accessToken = await getValidAccessToken();
+    const accessToken = await getValidAccessToken(userId);
 
     // Catalog: full back-catalog search via the swappable provider
     // (Innertube by default, official Data API behind CHANNEL_SEARCH_PROVIDER).
@@ -625,7 +694,7 @@ export async function searchChannelCatalogAction(
     // Transcripts: reuse the existing cross-video index, scoped to this channel
     // so the cosine scoring only runs over this channel's chunks (not every
     // channel's), then keep the top 20.
-    const transcripts = await searchAcross(q, 20, channelId);
+    const transcripts = await searchAcross(userId, q, 20, channelId);
 
     return { ok: true, channelId, catalog, transcripts };
   } catch (err) {
@@ -643,9 +712,10 @@ export async function searchChannelCatalogAction(
 export async function summarizeFromCatalogHitAction(
   hit: ChannelCatalogHit,
 ): Promise<SummarizeOutcome> {
+  const userId = await requireUserId();
   try {
     // Ensure the video row exists before the transcript fetch looks it up.
-    await upsertVideo({
+    await upsertVideo(userId, {
       video_id: hit.videoId,
       channel_id: hit.channelId,
       title: hit.title || '(untitled)',
@@ -692,8 +762,9 @@ export async function exportSummariesAction(
   format: 'markdown' | 'json',
 ): Promise<ExportOutcome> {
   try {
+    const userId = await requireUserId();
     const { exportChannelSummaries } = await import('@/lib/export');
-    const result = await exportChannelSummaries(channelId, format);
+    const result = await exportChannelSummaries(userId, channelId, format);
     return { ok: true, ...result };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -705,8 +776,9 @@ export async function exportAllSummariesAction(
   format: 'markdown' | 'json',
 ): Promise<ExportOutcome> {
   try {
+    const userId = await requireUserId();
     const { exportAllSummaries } = await import('@/lib/export');
-    const result = await exportAllSummaries(format);
+    const result = await exportAllSummaries(userId, format);
     return { ok: true, ...result };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -727,8 +799,9 @@ export interface DigestOutcome {
 
 export async function generateDigestAction(): Promise<DigestOutcome> {
   try {
+    const userId = await requireUserId();
     const { generateDigest } = await import('@/lib/digest');
-    const { digest, errors } = await generateDigest();
+    const { digest, errors } = await generateDigest(userId);
     revalidatePath('/digests');
     return {
       ok: true,
@@ -755,8 +828,9 @@ export interface InboxTriageOutcome {
 /** Mark a video as seen (dismissed from the inbox feed). */
 export async function dismissVideoAction(videoId: string): Promise<InboxTriageOutcome> {
   try {
+    const userId = await requireUserId();
     const { setVideoState } = await import('@/lib/inbox');
-    await setVideoState(videoId, 'seen');
+    await setVideoState(userId, videoId, 'seen');
     revalidatePath('/inbox');
     return { ok: true, videoId, state: 'seen' };
   } catch (err) {
@@ -768,8 +842,9 @@ export async function dismissVideoAction(videoId: string): Promise<InboxTriageOu
 /** Bookmark a video from the inbox (save for later). */
 export async function saveVideoAction(videoId: string): Promise<InboxTriageOutcome> {
   try {
+    const userId = await requireUserId();
     const { setVideoState } = await import('@/lib/inbox');
-    await setVideoState(videoId, 'saved');
+    await setVideoState(userId, videoId, 'saved');
     revalidatePath('/inbox');
     return { ok: true, videoId, state: 'saved' };
   } catch (err) {
@@ -781,8 +856,9 @@ export async function saveVideoAction(videoId: string): Promise<InboxTriageOutco
 /** Remove a video's triage state (return it to the 'new' feed). */
 export async function untriageVideoAction(videoId: string): Promise<InboxTriageOutcome> {
   try {
+    const userId = await requireUserId();
     const { setVideoState } = await import('@/lib/inbox');
-    await setVideoState(videoId, null);
+    await setVideoState(userId, videoId, null);
     revalidatePath('/inbox');
     return { ok: true, videoId, state: null };
   } catch (err) {
@@ -797,6 +873,8 @@ export async function untriageVideoAction(videoId: string): Promise<InboxTriageO
  * `summaries` table the rest of the app reads from.
  */
 export async function inboxSummarizeAction(videoId: string): Promise<SummarizeOutcome> {
+  const userId = await requireUserId();
+  void userId; // both stages below resolve the session user themselves
   // Stage 1: ensure the transcript is fetched.
   const t = await fetchTranscriptAction(videoId);
   if (!t.ok) {
@@ -822,8 +900,9 @@ export interface QueueOutcome {
  */
 export async function addToQueueAction(videoId: string): Promise<QueueOutcome> {
   try {
+    const userId = await requireUserId();
     const { enqueueForSummary } = await import('@/lib/summarize-queue');
-    await enqueueForSummary(videoId);
+    await enqueueForSummary(userId, videoId);
     revalidatePath('/summarize-later');
     return { ok: true, videoId, queued: true };
   } catch (err) {
@@ -837,8 +916,9 @@ export async function addToQueueAction(videoId: string): Promise<QueueOutcome> {
  */
 export async function removeFromQueueAction(videoId: string): Promise<QueueOutcome> {
   try {
+    const userId = await requireUserId();
     const { removeFromQueue } = await import('@/lib/summarize-queue');
-    await removeFromQueue(videoId);
+    await removeFromQueue(userId, videoId);
     revalidatePath('/summarize-later');
     return { ok: true, videoId, queued: false };
   } catch (err) {
@@ -866,9 +946,9 @@ export interface BatchQueueSummarizeOutcome {
  */
 export async function batchSummarizeQueueAction(): Promise<BatchQueueSummarizeOutcome> {
   try {
+    const userId = await requireUserId();
     const { listQueuedVideoIds, markQueueItemSummarized } = await import('@/lib/summarize-queue');
-    const { getVideo } = await import('@/lib/video-repo');
-    const videoIds = await listQueuedVideoIds();
+    const videoIds = await listQueuedVideoIds(userId);
     if (videoIds.length === 0) {
       return { ok: true, completed: 0, total: 0, errors: [] };
     }
@@ -881,22 +961,22 @@ export async function batchSummarizeQueueAction(): Promise<BatchQueueSummarizeOu
         // Stage 1: fetch transcript (skips if cached).
         const t = await fetchTranscriptAction(videoId);
         if (!t.ok) {
-          const v = await getVideo(videoId);
+          const v = await getVideo(userId, videoId);
           errors.push({ videoId, title: v?.title ?? videoId, error: t.error ?? 'Transcript fetch failed.' });
           continue;
         }
         // Stage 2: summarize.
         const s = await summarizeVideoAction(videoId);
         if (!s.ok) {
-          const v = await getVideo(videoId);
+          const v = await getVideo(userId, videoId);
           errors.push({ videoId, title: v?.title ?? videoId, error: s.error ?? 'Summarization failed.' });
           continue;
         }
-        await markQueueItemSummarized(videoId);
+        await markQueueItemSummarized(userId, videoId);
         completed += 1;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        const v = await getVideo(videoId);
+        const v = await getVideo(userId, videoId);
         errors.push({ videoId, title: v?.title ?? videoId, error: msg });
       }
     }
@@ -917,8 +997,9 @@ export async function batchSummarizeQueueAction(): Promise<BatchQueueSummarizeOu
 export async function listQueueAction(
   state?: 'queued' | 'summarized',
 ): Promise<import('@/lib/types').SummarizeQueueItem[]> {
+  const userId = await requireUserId();
   const { listQueueItems } = await import('@/lib/summarize-queue');
-  return listQueueItems(state);
+  return listQueueItems(userId, state);
 }
 
 // ----- TAV-29: Video reference graph — cross-video citations ------------------
@@ -936,9 +1017,10 @@ export interface VideoReferencesResult {
 
 export async function getVideoReferencesAction(videoId: string): Promise<VideoReferencesResult> {
   try {
+    const userId = await requireUserId();
     const [outgoing, incoming] = await Promise.all([
-      getOutgoingReferences(videoId),
-      getIncomingReferences(videoId),
+      getOutgoingReferences(userId, videoId),
+      getIncomingReferences(userId, videoId),
     ]);
     return { ok: true, videoId, outgoing, incoming };
   } catch (err) {
@@ -949,7 +1031,8 @@ export async function getVideoReferencesAction(videoId: string): Promise<VideoRe
 
 export async function getMostReferencedVideosAction(limit = 10): Promise<MostReferencedVideo[]> {
   try {
-    return await getMostReferencedVideos(limit);
+    const userId = await requireUserId();
+    return await getMostReferencedVideos(userId, limit);
   } catch (err) {
     console.error('getMostReferencedVideos failed (non-fatal):', err instanceof Error ? err.message : err);
     return [];
@@ -973,11 +1056,12 @@ export interface FetchPlaylistsOutcome {
  */
 export async function fetchChannelPlaylistsAction(channelId: string): Promise<FetchPlaylistsOutcome> {
   try {
-    const accessToken = await getValidAccessToken();
+    const userId = await requireUserId();
+    const accessToken = await getValidAccessToken(userId);
     const raw = await fetchChannelPlaylists(accessToken, channelId, 50);
     const { upsertChannelPlaylists, listChannelPlaylists } = await import('@/lib/playlist-repo');
-    await upsertChannelPlaylists(channelId, raw);
-    const playlists = await listChannelPlaylists(channelId);
+    await upsertChannelPlaylists(userId, channelId, raw);
+    const playlists = await listChannelPlaylists(userId, channelId);
     revalidatePath(`/c/${channelId}`);
     return { ok: true, channelId, playlists };
   } catch (err) {
@@ -998,18 +1082,19 @@ export async function fetchPlaylistVideosAction(playlistId: string): Promise<{
   error?: string;
 }> {
   try {
-    const accessToken = await getValidAccessToken();
+    const userId = await requireUserId();
+    const accessToken = await getValidAccessToken(userId);
     const raw = await fetchPlaylistVideos(accessToken, playlistId, 100);
     const { upsertPlaylistVideos, listPlaylistVideos } = await import('@/lib/playlist-repo');
-    await upsertPlaylistVideos(playlistId, raw);
+    await upsertPlaylistVideos(userId, playlistId, raw);
 
     // Upsert baseline `videos` rows so the summarize pipeline can find each
     // video (matches the catalog-hit upsert pattern in summarizeFromCatalogHit).
     const { getPlaylist } = await import('@/lib/playlist-repo');
-    const playlist = await getPlaylist(playlistId);
+    const playlist = await getPlaylist(userId, playlistId);
     const channelId = playlist?.channel_id ?? '';
     for (const v of raw) {
-      await upsertVideo({
+      await upsertVideo(userId, {
         video_id: v.video_id,
         channel_id: channelId,
         title: v.title || '(untitled)',
@@ -1028,7 +1113,7 @@ export async function fetchPlaylistVideosAction(playlistId: string): Promise<{
       });
     }
 
-    const videos = await listPlaylistVideos(playlistId);
+    const videos = await listPlaylistVideos(userId, playlistId);
     revalidatePath(`/c/${channelId}/playlists/${playlistId}`);
     return { ok: true, playlistId, videos };
   } catch (err) {
@@ -1055,19 +1140,20 @@ export interface SummarizePlaylistOutcome {
  */
 export async function summarizePlaylistAction(playlistId: string): Promise<SummarizePlaylistOutcome> {
   try {
+    const userId = await requireUserId();
     const { getPlaylist, listPlaylistVideos, savePlaylistSummary } = await import('@/lib/playlist-repo');
-    const playlist = await getPlaylist(playlistId);
+    const playlist = await getPlaylist(userId, playlistId);
     if (!playlist) {
       return { ok: false, playlistId, error: 'Playlist not found. Fetch playlists from the channel page first.' };
     }
 
-    const videos = await listPlaylistVideos(playlistId);
+    const videos = await listPlaylistVideos(userId, playlistId);
     if (videos.length === 0) {
       return { ok: false, playlistId, error: 'Playlist has no cached videos. Fetch the playlist first.' };
     }
 
     const { latestSummariesByVideoIds } = await import('@/lib/video-repo');
-    const summaryMap = await latestSummariesByVideoIds(videos.map(v => v.video_id));
+    const summaryMap = await latestSummariesByVideoIds(userId, videos.map(v => v.video_id));
 
     // Build the per-video summary inputs, skipping videos without a cached summary.
     const inputs = videos
@@ -1094,7 +1180,7 @@ export async function summarizePlaylistAction(playlistId: string): Promise<Summa
       videoSummaries: inputs,
     });
 
-    const saved = await savePlaylistSummary({
+    const saved = await savePlaylistSummary(userId, {
       playlist_id: playlistId,
       model: result.model,
       synthesis: result.synthesis,
@@ -1128,8 +1214,9 @@ export async function saveIntegrationSettingsAction(
   options?: Record<string, string>,
 ): Promise<IntegrationSettingsOutcome> {
   try {
+    const userId = await requireUserId();
     const { saveIntegrationSettings } = await import('@/lib/integrations');
-    await saveIntegrationSettings(key, token, options);
+    await saveIntegrationSettings(userId, key, token, options);
     revalidatePath('/settings');
     return { ok: true, key, configured: token.trim().length > 0 };
   } catch (err) {
@@ -1157,6 +1244,7 @@ export async function sendToIntegrationAction(
   videoId: string,
 ): Promise<SendToIntegrationOutcome> {
   try {
+    const userId = await requireUserId();
     const { getIntegrationSettings, buildExportPayload, sendToReadwise, INTEGRATIONS } = await import('@/lib/integrations');
     const { getBookmarkedSummary } = await import('@/lib/video-repo');
 
@@ -1165,12 +1253,12 @@ export async function sendToIntegrationAction(
       return { ok: false, integration, videoId, error: meta ? `${meta.label} integration is not implemented yet.` : 'Unknown integration.' };
     }
 
-    const settings = await getIntegrationSettings(integration);
+    const settings = await getIntegrationSettings(userId, integration);
     if (!settings || !settings.token) {
       return { ok: false, integration, videoId, error: `No ${meta.label} token configured. Add one in Settings.` };
     }
 
-    const item = await getBookmarkedSummary(videoId);
+    const item = await getBookmarkedSummary(userId, videoId);
     if (!item) {
       return { ok: false, integration, videoId, error: 'This summary is not bookmarked. Bookmark it first.' };
     }
@@ -1210,8 +1298,9 @@ export async function pinToQueueTopAction(
   queue: 'watch' | 'music',
 ): Promise<PinQueueOutcome> {
   try {
+    const userId = await requireUserId();
     const { pinToQueueTop } = await import('@/lib/queue');
-    await pinToQueueTop(videoId, queue);
+    await pinToQueueTop(userId, videoId, queue);
     revalidatePath('/watch');
     revalidatePath('/music');
     return { ok: true, queue, count: 1 };
@@ -1232,8 +1321,9 @@ export async function pinMultipleToQueueTopAction(
   queue: 'watch' | 'music',
 ): Promise<PinQueueOutcome> {
   try {
+    const userId = await requireUserId();
     const { pinMultipleToQueueTop } = await import('@/lib/queue');
-    await pinMultipleToQueueTop(videoIds, queue);
+    await pinMultipleToQueueTop(userId, videoIds, queue);
     revalidatePath('/watch');
     revalidatePath('/music');
     return { ok: true, queue, count: videoIds.length };
@@ -1270,17 +1360,21 @@ export async function skipQueueItemAction(
   queue: 'watch' | 'music',
 ): Promise<QueueControlOutcome> {
   try {
+    const userId = await requireUserId();
     const { withTransaction } = await import('@/lib/db');
     await withTransaction(async (client) => {
       const now = Math.floor(Date.now() / 1000);
       // Unpin first so a failure here leaves the video pinned but not yet
       // marked seen — recoverable, not contradictory.
-      await client.query('DELETE FROM queue_pins WHERE queue = $1 AND video_id = $2', [queue, videoId]);
       await client.query(
-        `INSERT INTO video_states (video_id, state, updated_at)
-         VALUES ($1, 'seen', $2)
-         ON CONFLICT (video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
-        [videoId, now],
+        'DELETE FROM queue_pins WHERE user_id = $1 AND queue = $2 AND video_id = $3',
+        [userId, queue, videoId],
+      );
+      await client.query(
+        `INSERT INTO video_states (user_id, video_id, state, updated_at)
+         VALUES ($1, $2, 'seen', $3)
+         ON CONFLICT (user_id, video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
+        [userId, videoId, now],
       );
     });
     revalidateQueue(queue, true);
@@ -1301,8 +1395,9 @@ export async function unpinQueueItemAction(
   queue: 'watch' | 'music',
 ): Promise<QueueControlOutcome> {
   try {
+    const userId = await requireUserId();
     const { unpinFromQueue } = await import('@/lib/queue');
-    await unpinFromQueue(videoId, queue);
+    await unpinFromQueue(userId, videoId, queue);
     revalidateQueue(queue);
     return { ok: true, videoId, queue };
   } catch (err) {
@@ -1324,28 +1419,32 @@ export async function deferToLaterQueueAction(
   queue: 'watch' | 'music',
 ): Promise<QueueControlOutcome> {
   try {
+    const userId = await requireUserId();
     const { withTransaction } = await import('@/lib/db');
     const { newId } = await import('@/lib/id');
     await withTransaction(async (client) => {
       const now = Math.floor(Date.now() / 1000);
       // Enqueue for summary (idempotent upsert, matching enqueueForSummary).
       await client.query(
-        `INSERT INTO summarize_queue (id, video_id, state, queued_at, summarized_at, created_at)
-         VALUES ($1, $2, 'queued', $3, NULL, $3)
-         ON CONFLICT (video_id) DO UPDATE SET
+        `INSERT INTO summarize_queue (id, user_id, video_id, state, queued_at, summarized_at, created_at)
+         VALUES ($1, $2, $3, 'queued', $4, NULL, $4)
+         ON CONFLICT (user_id, video_id) DO UPDATE SET
           state = 'queued',
           queued_at = excluded.queued_at,
           summarized_at = NULL`,
-        [newId(), videoId, now],
+        [newId(), userId, videoId, now],
       );
       // Unpin so it doesn't reappear at the top of the playback queue.
-      await client.query('DELETE FROM queue_pins WHERE queue = $1 AND video_id = $2', [queue, videoId]);
+      await client.query(
+        'DELETE FROM queue_pins WHERE user_id = $1 AND queue = $2 AND video_id = $3',
+        [userId, queue, videoId],
+      );
       // Mark seen so the queue query drops it.
       await client.query(
-        `INSERT INTO video_states (video_id, state, updated_at)
-         VALUES ($1, 'seen', $2)
-         ON CONFLICT (video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
-        [videoId, now],
+        `INSERT INTO video_states (user_id, video_id, state, updated_at)
+         VALUES ($1, $2, 'seen', $3)
+         ON CONFLICT (user_id, video_id) DO UPDATE SET state = 'seen', updated_at = excluded.updated_at`,
+        [userId, videoId, now],
       );
     });
     revalidateQueue(queue, true);
@@ -1381,6 +1480,7 @@ export async function chatWithLibraryAction(
   question: string,
   deepResearch = false,
 ): Promise<ChatWithLibraryOutcome> {
+  const userId = await requireUserId();
   const q = question.trim();
   if (!q) return { ok: false, scope, error: 'Empty question.' };
   try {
@@ -1390,21 +1490,21 @@ export async function chatWithLibraryAction(
       return { ok: false, scope, error: 'Invalid scope.' };
     }
 
-    const history = await listLibraryChatMessages(scope, 20);
-    await saveLibraryChatMessage({ scope, role: 'user', content: q });
+    const history = await listLibraryChatMessages(userId, scope, 20);
+    await saveLibraryChatMessage(userId, { scope, role: 'user', content: q });
 
     const result = deepResearch
-      ? await chatWithLibraryAgent({ question: q, scope, history })
-      : await chatWithLibrary({ question: q, scope, history });
+      ? await chatWithLibraryAgent({ userId, question: q, scope, history })
+      : await chatWithLibrary({ userId, question: q, scope, history });
 
-    await saveLibraryChatMessage({
+    await saveLibraryChatMessage(userId, {
       scope,
       role: 'assistant',
       content: result.answer,
       toolTrace: deepResearch && result.toolCalls.length > 0 ? JSON.stringify(result.toolCalls) : null,
     });
 
-    const messages = await listLibraryChatMessages(scope, 50);
+    const messages = await listLibraryChatMessages(userId, scope, 50);
 
     return {
       ok: true,
@@ -1421,12 +1521,14 @@ export async function chatWithLibraryAction(
 }
 
 export async function loadLibraryChatHistoryAction(scope: string): Promise<import('@/lib/types').LibraryChatMessage[]> {
-  return listLibraryChatMessages(scope, 50);
+  const userId = await requireUserId();
+  return listLibraryChatMessages(userId, scope, 50);
 }
 
 export async function clearLibraryChatAction(scope: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    await clearLibraryChat(scope);
+    const userId = await requireUserId();
+    await clearLibraryChat(userId, scope);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: friendlyError(err) };
@@ -1436,16 +1538,20 @@ export async function clearLibraryChatAction(scope: string): Promise<{ ok: boole
 /**
  * Aggregate index stats for the /chat status line: how many videos have been
  * indexed for chat, how many chunks exist, and how many videos have summaries.
+ * Signed-out visitors get zeros (chat is a signed-in feature, TAV-68).
  */
 export async function libraryChatStatusAction(): Promise<import('@/lib/types').LibraryChatStatus> {
+  const user = await getSessionUser();
+  if (!user) return { indexedVideos: 0, chunkCount: 0, summarizedVideos: 0 };
   const { query } = await import('@/lib/db');
   try {
     const [chunks, summaries] = await Promise.all([
       query(
         `SELECT COUNT(*) AS chunk_count, COUNT(DISTINCT video_id) AS video_count
-         FROM transcript_chunks WHERE chunk_type = 'transcript'`,
+         FROM transcript_chunks WHERE user_id = $1 AND chunk_type = 'transcript'`,
+        [user.id],
       ),
-      query('SELECT COUNT(DISTINCT video_id) AS n FROM summaries'),
+      query('SELECT COUNT(DISTINCT video_id) AS n FROM summaries WHERE user_id = $1', [user.id]),
     ]);
     return {
       indexedVideos: Number(chunks.rows[0]?.video_count ?? 0),
@@ -1459,10 +1565,11 @@ export async function libraryChatStatusAction(): Promise<import('@/lib/types').L
 
 /** Scope options for the /chat picker: folders, tags, channels in one payload. */
 export async function listChatScopeOptionsAction(): Promise<import('@/lib/types').ChatScopeOptions> {
+  const userId = await requireUserId();
   const [folders, tags, channels] = await Promise.all([
-    import('@/lib/repo').then(m => m.listFolders()),
-    import('@/lib/repo').then(m => m.listTags()),
-    import('@/lib/repo').then(m => m.listChannels({ includeMusic: true, hidden: true, sort: 'alpha' })),
+    import('@/lib/repo').then(m => m.listFolders(userId)),
+    import('@/lib/repo').then(m => m.listTags(userId)),
+    import('@/lib/repo').then(m => m.listChannels(userId, { includeMusic: true, hidden: true, sort: 'alpha' })),
   ]);
   return {
     folders: folders.map(f => ({ id: f.id, name: f.name })),
@@ -1483,7 +1590,8 @@ export interface DossierOutcome {
 /** Generate (or regenerate) a channel's dossier from its cached summaries. */
 export async function generateChannelDossierAction(channelId: string): Promise<DossierOutcome> {
   try {
-    const dossier = await generateDossier(channelId);
+    const userId = await requireUserId();
+    const dossier = await generateDossier(userId, channelId);
     return { ok: true, channelId, dossier };
   } catch (err) {
     return { ok: false, channelId, error: friendlyError(err) };
@@ -1492,7 +1600,8 @@ export async function generateChannelDossierAction(channelId: string): Promise<D
 
 export async function getChannelDossierAction(channelId: string): Promise<DossierOutcome> {
   try {
-    const dossier = await loadDossier(channelId);
+    const userId = await requireUserId();
+    const dossier = await loadDossier(userId, channelId);
     return dossier
       ? { ok: true, channelId, dossier }
       : { ok: false, channelId, error: 'No dossier generated yet.' };
@@ -1505,7 +1614,8 @@ export async function getChannelDossierAction(channelId: string): Promise<Dossie
 
 export async function getTopicGraphAction(): Promise<import('@/lib/types').TopicGraph> {
   try {
-    return await buildTopicGraph();
+    const userId = await requireUserId();
+    return await buildTopicGraph(userId);
   } catch {
     return { nodes: [], edges: [], summarizedVideos: 0, generatedAt: Math.floor(Date.now() / 1000) };
   }
@@ -1536,8 +1646,11 @@ export interface PastedVideoOutcome {
  * token spend, mirroring the explicit 1-click flow everywhere else in the app.
  * Transcript failures are non-fatal: the video still opens (playable), the
  * summarize button surfaces the "no captions" state.
+ *
+ * TAV-68: anonymous-tolerant — signed-out pastes land in the __anon bucket.
  */
 export async function processPastedUrlAction(input: string): Promise<PastedVideoOutcome> {
+  const userId = await getScopedUserId();
   const parsed = parseYouTubeUrl(input);
   if (parsed.kind !== 'video') {
     const error =
@@ -1553,11 +1666,11 @@ export async function processPastedUrlAction(input: string): Promise<PastedVideo
 
   try {
     // Fast path: a cached video skips the ingest (and its API quota) entirely.
-    const existing = await getVideo(videoId);
+    const existing = await getVideo(userId, videoId);
     if (!existing) {
       // Ingest works with or without a connected account — anonymous pastes
       // go through the Innertube path (TAV-67), connected ones via the Data API.
-      const ingested = await ingestVideoById(videoId);
+      const ingested = await ingestVideoById(userId, videoId);
       if (!ingested.ok) {
         const error = ingested.reason === 'not-found'
           ? (ingested.error ?? 'Video not found.')
@@ -1566,7 +1679,7 @@ export async function processPastedUrlAction(input: string): Promise<PastedVideo
       }
     }
 
-    const video = await getVideoWithSummary(videoId);
+    const video = await getVideoWithSummary(userId, videoId);
     if (!video) {
       return { ok: false, videoId, error: 'Video not found. Refresh videos first.' };
     }
@@ -1607,4 +1720,3 @@ export async function processPastedUrlAction(input: string): Promise<PastedVideo
     return { ok: false, videoId, error: friendlyError(err) };
   }
 }
-

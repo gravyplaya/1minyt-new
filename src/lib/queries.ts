@@ -9,26 +9,27 @@ export const CHANNEL_PAGE_SIZE = 25;
 export const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 
 /**
- * Aggregate counts for the sidebar badges.
+ * Aggregate counts for the sidebar badges. TAV-68: scoped to one user.
  */
-export async function countChannels() {
+export async function countChannels(userId: string) {
   const client = await getDb();
   try {
-    const totalResult = await client.query('SELECT COUNT(*) as n FROM channels WHERE hidden = 0');
+    const totalResult = await client.query('SELECT COUNT(*) as n FROM channels WHERE user_id = $1 AND hidden = 0', [userId]);
     const total = Number(totalResult.rows[0].n);
 
     const unfiledResult = await client.query(`
       SELECT COUNT(*) as n FROM channels c
-      WHERE c.hidden = 0
+      WHERE c.user_id = $1
+        AND c.hidden = 0
         AND (c.music_flag IS NULL OR c.music_flag != 1)
-        AND NOT EXISTS (SELECT 1 FROM channel_folders cf WHERE cf.channel_id = c.channel_id)
-    `);
+        AND NOT EXISTS (SELECT 1 FROM channel_folders cf WHERE cf.channel_id = c.channel_id AND cf.user_id = c.user_id)
+    `, [userId]);
     const unfiled = Number(unfiledResult.rows[0].n);
 
-    const musicResult = await client.query('SELECT COUNT(*) as n FROM channels WHERE music_flag = 1');
+    const musicResult = await client.query('SELECT COUNT(*) as n FROM channels WHERE user_id = $1 AND music_flag = 1', [userId]);
     const music = Number(musicResult.rows[0].n);
 
-    const hiddenResult = await client.query('SELECT COUNT(*) as n FROM channels WHERE hidden = 1');
+    const hiddenResult = await client.query('SELECT COUNT(*) as n FROM channels WHERE user_id = $1 AND hidden = 1', [userId]);
     const hidden = Number(hiddenResult.rows[0].n);
 
     return { total, unfiled, music, hidden };
@@ -41,7 +42,7 @@ export async function countChannels() {
  * Thin wrapper around listChannelsPage with string-ish inputs from search params.
  * Accepts a 1-based page number and returns the page slice plus the total count.
  */
-export async function queryChannelsFromParams(params: {
+export async function queryChannelsFromParams(userId: string, params: {
   q?: string;
   folder?: string | null;
   tag?: string | null;
@@ -69,5 +70,5 @@ export async function queryChannelsFromParams(params: {
   query.limit = pageSize;
   query.offset = (page - 1) * pageSize;
 
-  return listChannelsPage(query);
+  return listChannelsPage(userId, query);
 }

@@ -3,7 +3,7 @@ import { getMetrics } from '@/lib/metrics';
 import type { CoverageStat, WeeklyBucket } from '@/lib/metrics';
 import { AppShell } from '../_components/AppShell';
 import { formatCount, formatRelative, youtubeVideoUrl } from '../_lib/format';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser, ANON_USER_ID } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,14 +13,13 @@ export const metadata = {
 };
 
 export default async function MetricsPage() {
-  const [connected, profile, m] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    getMetrics(),
-  ]);
+  const { user, connected } = await resolvePageUser();
+  // The __anon sentinel never has summary/chat activity (LLM actions require
+  // sign-in), so signed-out visitors get an all-zero report.
+  const m = await getMetrics(user?.id ?? ANON_USER_ID);
 
   return (
-    <AppShell tab="library" libraryActive="metrics" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+    <AppShell tab="library" libraryActive="metrics" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📊 Your metrics</h1>
         <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 28 }}>
           Derived from your summary and chat activity. Updated automatically as you use the app.

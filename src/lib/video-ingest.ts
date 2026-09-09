@@ -1,5 +1,8 @@
 /**
- * TAV-67: Ingest a single arbitrary YouTube video by id.
+ * TAV-67/TAV-68: Ingest a single arbitrary YouTube video by id, scoped to one
+ * user's library. Signed-out callers pass the ANON_USER_ID sentinel so the
+ * rows land in the shared anonymous bucket; signed-in users get their own
+ * copy (a video pasted by two users exists once per user).
  *
  * Promoted from the /watch page's private bestEffortFetchVideo (TAV-56) so the
  * paste-a-URL flow (TAV-67) and the /watch?v= ad-hoc fallback share one
@@ -45,22 +48,22 @@ export interface IngestVideoResult {
   error?: string;
 }
 
-export async function ingestVideoById(videoId: string): Promise<IngestVideoResult> {
+export async function ingestVideoById(userId: string, videoId: string): Promise<IngestVideoResult> {
   // Connected users go through the official Data API; anonymous pasteers
   // (TAV-67: no sign-in) go straight to Innertube. A missing/invalid token
   // is not an error — it just picks the path.
   let accessToken: string | null = null;
   try {
-    accessToken = await getValidAccessToken();
+    accessToken = await getValidAccessToken(userId);
   } catch {
     accessToken = null;
   }
 
   if (!accessToken) {
-    return ingestVideoViaInnertube(videoId);
+    return ingestVideoViaInnertube(userId, videoId);
   }
 
-  const result = await ingestVideoViaDataApi(videoId, accessToken);
+  const result = await ingestVideoViaDataApi(userId, videoId, accessToken);
   // Quota blip / network error on the Data API path — the paste should still
   // succeed if Innertube can see the video. (Not-found is final: the video
   // really isn't resolvable via an authorized account either.)
@@ -68,13 +71,13 @@ export async function ingestVideoById(videoId: string): Promise<IngestVideoResul
     console.warn(
       `ingestVideoById: Data API failed for ${videoId} (${result.error}), falling back to Innertube.`,
     );
-    return ingestVideoViaInnertube(videoId);
+    return ingestVideoViaInnertube(userId, videoId);
   }
   return result;
 }
 
 /** Official Data API path: `videos.list` by id with full metadata. */
-async function ingestVideoViaDataApi(videoId: string, accessToken: string): Promise<IngestVideoResult> {
+async function ingestVideoViaDataApi(userId: string, videoId: string, accessToken: string): Promise<IngestVideoResult> {
   let details: youtube_v3.Schema$Video[];
   try {
     details = await fetchVideoDetails(accessToken, [videoId]);
@@ -104,9 +107,9 @@ async function ingestVideoViaDataApi(videoId: string, accessToken: string): Prom
   const channelId = snip.channelId ?? null;
 
   try {
-    await ensureChannelWithDetails(accessToken, channelId, snip.channelTitle ?? null);
+    await ensureChannelWithDetails(userId, accessToken, channelId, snip.channelTitle ?? null);
 
-    await upsertVideo({
+    await upsertVideo(userId, {
       video_id: videoId,
       channel_id: channelId ?? 'unknown',
       title: snip.title ?? '(untitled)',
@@ -160,7 +163,7 @@ async function ingestVideoViaDataApi(videoId: string, accessToken: string): Prom
  */
 const INNERTUBE_INGEST_CLIENTS = ['ANDROID', 'IOS', 'WEB'] as const;
 
-async function ingestVideoViaInnertube(videoId: string): Promise<IngestVideoResult> {
+async function ingestVideoViaInnertube(userId: string, videoId: string): Promise<IngestVideoResult> {
   let lastFailure = 'no attempts';
 
   for (const client of INNERTUBE_INGEST_CLIENTS) {
@@ -207,9 +210,9 @@ async function ingestVideoViaInnertube(videoId: string): Promise<IngestVideoResu
       const channelName = b.channel?.name ?? b.author ?? channelId;
 
       try {
-        await ensureChannelRow(channelId, channelName ?? null);
+        await ensureChannelRow(userId, channelId, channelName ?? null);
 
-        await upsertVideo({
+        await upsertVideo(userId, {
           video_id: videoId,
           channel_id: channelId ?? 'unknown',
           title: b.title,
@@ -277,25 +280,26 @@ function pickInnertubeThumb(thumbs: Array<{ url?: string }> | undefined | null):
  * metadata belongs to the subscription sync.
  */
 async function ensureChannelWithDetails(
+  userId: string,
   accessToken: string,
   channelId: string | null,
   channelTitle: string | null,
 ): Promise<void> {
   if (!channelId) return;
-  const existing = await getChannel(channelId);
+  const existing = await getChannel(userId, channelId);
   if (existing) return;
 
   try {
     const [ch] = await fetchChannels(accessToken, [channelId]);
     if (ch && ch.id) {
-      await upsertChannel(channelRowFromApi(ch));
+      await upsertChannel(userId, channelRowFromApi(ch));
       return;
     }
   } catch (err) {
     // Non-fatal: the stub below still satisfies the FK.
     console.error('Channel details fetch failed (non-fatal):', err instanceof Error ? err.message : err);
   }
-  await ensureChannelRow(channelId, channelTitle);
+  await ensureChannelRow(userId, channelId, channelTitle);
 }
 
 /** Map a `channels.list` item to a ChannelRow — same shape as sync.ts's mapping. */

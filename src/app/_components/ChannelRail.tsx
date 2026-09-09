@@ -20,12 +20,15 @@ const railHeading: React.CSSProperties = {
 };
 
 export async function ChannelRail({
+  userId,
   activeFolder = null,
   activeTag = null,
   showMusic = false,
   showHidden = false,
   activeHome = false,
 }: {
+  /** TAV-68: owner of the folders/tags/counts this rail lists. */
+  userId: string;
   activeFolder?: string | null;
   activeTag?: string | null;
   showMusic?: boolean;
@@ -33,9 +36,9 @@ export async function ChannelRail({
   activeHome?: boolean;
 }) {
   const [counts, folders, tags] = await Promise.all([
-    countChannels(),
-    listFolders(),
-    listTags(),
+    countChannels(userId),
+    listFolders(userId),
+    listTags(userId),
   ]);
 
   return (

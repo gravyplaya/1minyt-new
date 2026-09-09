@@ -1,7 +1,7 @@
 import { AppShell } from '../_components/AppShell';
 import { SummarizedVideoList } from '../_components/SummarizedVideoList';
 import { listSummarizedVideos } from '@/lib/video-repo';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,14 +11,11 @@ export const metadata = {
 };
 
 export default async function SummarizedPage() {
-  const [connected, profile, items] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    listSummarizedVideos(),
-  ]);
+  const { user, connected } = await resolvePageUser();
+  const items = connected && user ? await listSummarizedVideos(user.id) : [];
 
   return (
-    <AppShell tab="library" libraryActive="summarized" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+    <AppShell tab="library" libraryActive="summarized" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>✦ Summarized videos</h1>
       <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
         Every video with a cached summary, sorted by most recently summarized.

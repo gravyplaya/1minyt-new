@@ -29,15 +29,17 @@ export const INBOX_PAGE_SIZE = 30;
  *
  * Returns the page plus the total count (ignoring limit/offset) for pagination.
  */
-export async function listInboxVideos(query: InboxQuery = {}): Promise<{ videos: InboxVideo[]; total: number }> {
+export async function listInboxVideos(userId: string, query: InboxQuery = {}): Promise<{ videos: InboxVideo[]; total: number }> {
   const scope: 'new' | 'saved' = query.scope === 'saved' ? 'saved' : 'new';
   const limit = Math.max(1, Math.min(200, query.limit ?? INBOX_PAGE_SIZE));
   const offset = Math.max(0, query.offset ?? 0);
 
   const where: string[] = [];
-  const params: unknown[] = [];
-  let pIdx = 1;
+  const params: unknown[] = [userId];
+  let pIdx = 2;
 
+  // TAV-68: the feed is owner-scoped — first param, always.
+  where.push('v.user_id = $1');
   // Exclude hidden channels — the user has soft-hidden them from the app.
   where.push('c.hidden = 0');
   // Exclude live broadcasts from the triage feed.
@@ -71,8 +73,8 @@ export async function listInboxVideos(query: InboxQuery = {}): Promise<{ videos:
     const countSql = `
       SELECT COUNT(*) AS n
       FROM videos v
-      JOIN channels c ON c.channel_id = v.channel_id
-      LEFT JOIN video_states vs ON vs.video_id = v.video_id
+      JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+      LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
       ${whereSql}`;
     const countResult = await client.query(countSql, params);
     const total = Number(countResult.rows[0].n);
@@ -84,7 +86,8 @@ export async function listInboxVideos(query: InboxQuery = {}): Promise<{ videos:
       WITH channel_interaction AS (
         SELECT v2.channel_id, COUNT(s.id) AS summary_count
         FROM videos v2
-        JOIN summaries s ON s.video_id = v2.video_id
+        JOIN summaries s ON s.user_id = v2.user_id AND s.video_id = v2.video_id
+        WHERE v2.user_id = $1
         GROUP BY v2.channel_id
       ),
       scored AS (
@@ -96,7 +99,7 @@ export async function listInboxVideos(query: InboxQuery = {}): Promise<{ videos:
           v.view_count, v.like_count, v.comment_count, v.category_id,
           v.transcript_status,
           vs.state AS triage_state,
-          EXISTS (SELECT 1 FROM summaries s WHERE s.video_id = v.video_id) AS has_summary,
+          EXISTS (SELECT 1 FROM summaries s WHERE s.user_id = v.user_id AND s.video_id = v.video_id) AS has_summary,
           -- engagement: log-scaled view + like counts (null/0 → 0 contribution)
           (LN(GREATEST(COALESCE(v.view_count, 1), 1)) + LN(COALESCE(v.like_count, 0) + 1)) AS engagement,
           -- recency: exponential decay, half-life ~7 days (604800s).
@@ -108,8 +111,8 @@ export async function listInboxVideos(query: InboxQuery = {}): Promise<{ videos:
           -- channel interaction: capped bonus (saturates at 5 prior summaries).
           LEAST(COALESCE(ci.summary_count, 0) / 5.0, 1) AS channel_signal
         FROM videos v
-        JOIN channels c ON c.channel_id = v.channel_id
-        LEFT JOIN video_states vs ON vs.video_id = v.video_id
+        JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+        LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
         LEFT JOIN channel_interaction ci ON ci.channel_id = v.channel_id
         ${whereSql}
       )
@@ -171,19 +174,19 @@ export async function listInboxVideos(query: InboxQuery = {}): Promise<{ videos:
  * Set or update the triage state for a video. Upserts the `video_states` row.
  * Passing `null` for state removes the triage row (returns the video to 'new').
  */
-export async function setVideoState(videoId: string, state: VideoTriageState | null): Promise<void> {
+export async function setVideoState(userId: string, videoId: string, state: VideoTriageState | null): Promise<void> {
   const client = await getDb();
   try {
     if (state === null) {
-      await client.query('DELETE FROM video_states WHERE video_id = $1', [videoId]);
+      await client.query('DELETE FROM video_states WHERE user_id = $1 AND video_id = $2', [userId, videoId]);
       return;
     }
     const now = Math.floor(Date.now() / 1000);
     await client.query(
-      `INSERT INTO video_states (video_id, state, updated_at)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (video_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
-      [videoId, state, now],
+      `INSERT INTO video_states (user_id, video_id, state, updated_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, video_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
+      [userId, videoId, state, now],
     );
   } finally {
     client.release();
@@ -191,15 +194,15 @@ export async function setVideoState(videoId: string, state: VideoTriageState | n
 }
 
 /** Count of untriaged videos — for the inbox badge. */
-export async function countInboxNew(): Promise<number> {
+export async function countInboxNew(userId: string): Promise<number> {
   const client = await getDb();
   try {
     const { rows } = await client.query(`
       SELECT COUNT(*) AS n
       FROM videos v
-      JOIN channels c ON c.channel_id = v.channel_id
-      LEFT JOIN video_states vs ON vs.video_id = v.video_id
-      WHERE c.hidden = 0 AND v.is_live = 0 AND vs.state IS NULL`);
+      JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+      LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
+      WHERE v.user_id = $1 AND c.hidden = 0 AND v.is_live = 0 AND vs.state IS NULL`, [userId]);
     return Number(rows[0].n);
   } finally {
     client.release();
@@ -211,7 +214,7 @@ export async function countInboxNew(): Promise<number> {
  * for the topic filter dropdown. YouTube category ids are stable; we don't
  * resolve them to human names here (the UI can map the well-known ones).
  */
-export async function listInboxCategories(): Promise<{ category_id: number; video_count: number }[]> {
+export async function listInboxCategories(userId: string): Promise<{ category_id: number; video_count: number }[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -220,11 +223,11 @@ export async function listInboxCategories(): Promise<{ category_id: number; vide
     }>(`
       SELECT v.category_id, COUNT(*) AS video_count
       FROM videos v
-      JOIN channels c ON c.channel_id = v.channel_id
-      LEFT JOIN video_states vs ON vs.video_id = v.video_id
-      WHERE c.hidden = 0 AND v.is_live = 0 AND vs.state IS NULL AND v.category_id IS NOT NULL
+      JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+      LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
+      WHERE v.user_id = $1 AND c.hidden = 0 AND v.is_live = 0 AND vs.state IS NULL AND v.category_id IS NOT NULL
       GROUP BY v.category_id
-      ORDER BY video_count DESC`);
+      ORDER BY video_count DESC`, [userId]);
     return rows.map(r => ({ category_id: r.category_id, video_count: Number(r.video_count) }));
   } finally {
     client.release();
@@ -234,7 +237,7 @@ export async function listInboxCategories(): Promise<{ category_id: number; vide
 /**
  * Distinct channels that have untriaged videos, for the channel filter dropdown.
  */
-export async function listInboxChannels(): Promise<{ channel_id: string; channel_title: string; video_count: number }[]> {
+export async function listInboxChannels(userId: string): Promise<{ channel_id: string; channel_title: string; video_count: number }[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query<{
@@ -244,11 +247,11 @@ export async function listInboxChannels(): Promise<{ channel_id: string; channel
     }>(`
       SELECT v.channel_id, c.title AS channel_title, COUNT(*) AS video_count
       FROM videos v
-      JOIN channels c ON c.channel_id = v.channel_id
-      LEFT JOIN video_states vs ON vs.video_id = v.video_id
-      WHERE c.hidden = 0 AND v.is_live = 0 AND vs.state IS NULL
+      JOIN channels c ON c.user_id = v.user_id AND c.channel_id = v.channel_id
+      LEFT JOIN video_states vs ON vs.user_id = v.user_id AND vs.video_id = v.video_id
+      WHERE v.user_id = $1 AND c.hidden = 0 AND v.is_live = 0 AND vs.state IS NULL
       GROUP BY v.channel_id, c.title
-      ORDER BY video_count DESC`);
+      ORDER BY video_count DESC`, [userId]);
     return rows.map(r => ({
       channel_id: r.channel_id,
       channel_title: r.channel_title,

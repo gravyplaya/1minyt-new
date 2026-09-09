@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import { buildWatchQueue } from '@/lib/queue';
 import { getVideoWithSummary } from '@/lib/video-repo';
 import { ingestVideoById } from '@/lib/video-ingest';
-import { isConnected, getUserProfile } from '@/lib/tokens';
+import { resolvePageUser, ANON_USER_ID } from '@/lib/auth';
 import { AppShell } from '../_components/AppShell';
 import { WatchQueue } from '../_components/WatchQueue';
 import type { WatchQueueItem } from '@/lib/types';
@@ -26,14 +26,15 @@ interface PageProps {
  * TAV-67) so the watch page can surface it without requiring a channel sync
  * first. The ingest is non-fatal — if it fails, we fall back to the first
  * queue item, or an empty-state message when there is no queue either.
+ *
+ * TAV-68: the page works signed-out — anonymous ingests/watching land in the
+ * shared __anon bucket. The ranked queue only exists for connected users.
  */
 export default async function WatchPage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const [connected, profile, queue] = await Promise.all([
-    isConnected(),
-    getUserProfile(),
-    buildWatchQueue(20),
-  ]);
+  const { user, connected } = await resolvePageUser();
+  const scopedUserId = user?.id ?? ANON_USER_ID;
+  const queue = connected && user ? await buildWatchQueue(user.id, 20) : [];
 
   // Determine the "now playing" video: prefer ?v= if it's in the queue, else
   // the top-ranked item. If ?v= is set but missing from the local cache, try
@@ -49,20 +50,20 @@ export default async function WatchPage({ searchParams }: PageProps) {
     if (inQueue) {
       nowPlayingId = requestedId;
     } else {
-      const ingested = await ingestVideoById(requestedId);
+      const ingested = await ingestVideoById(scopedUserId, requestedId);
       if (ingested.ok) nowPlayingId = requestedId;
     }
   }
 
   if (!nowPlayingId) {
     return (
-      <AppShell tab="watch" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+      <AppShell tab="watch" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
         <EmptyWatchState connected={connected} failedRequested={Boolean(requestedId)} />
       </AppShell>
     );
   }
 
-  const nowPlaying = await getVideoWithSummary(nowPlayingId);
+  const nowPlaying = await getVideoWithSummary(scopedUserId, nowPlayingId);
   if (!nowPlaying) {
     notFound();
   }
@@ -74,7 +75,7 @@ export default async function WatchPage({ searchParams }: PageProps) {
     .slice(0, 19);
 
   return (
-    <AppShell tab="watch" connected={connected} profile={profile} mainStyle={{ maxWidth: 'none', width: '100%' }}>
+    <AppShell tab="watch" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
       <WatchQueue queue={orderedQueue} nowPlaying={nowPlaying} />
     </AppShell>
   );

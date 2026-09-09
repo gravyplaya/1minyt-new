@@ -28,19 +28,20 @@ export interface IndexResult {
 }
 
 /**
- * Index a video's transcript for vector search.
+ * Index a video's transcript for vector search. TAV-68: chunks are per-user
+ * rows — the caller scopes every read/write with the owner's user id.
  */
-export async function indexVideo(videoId: string): Promise<IndexResult> {
+export async function indexVideo(userId: string, videoId: string): Promise<IndexResult> {
   try {
     // 1. Get or fetch timestamped segments.
-    let segments = await getSegments(videoId);
+    let segments = await getSegments(userId, videoId);
     if (segments.length === 0) {
       const fetched = await fetchTranscript(videoId);
       if (!fetched || !fetched.segments || fetched.segments.length === 0) {
         return { ok: false, videoId, chunkCount: 0, embedModel: EMBEDDING_MODEL, error: 'No transcript available for this video.' };
       }
-      await setTranscript(videoId, fetched.text);
-      await saveSegments(videoId, fetched.segments);
+      await setTranscript(userId, videoId, fetched.text);
+      await saveSegments(userId, videoId, fetched.segments);
       segments = fetched.segments;
     }
 
@@ -59,16 +60,16 @@ export async function indexVideo(videoId: string): Promise<IndexResult> {
       const now = Math.floor(Date.now() / 1000);
       await client.query('BEGIN');
       // TAV-30: only delete transcript chunks — summary chunks coexist now.
-      await client.query('DELETE FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'transcript\'', [videoId]);
+      await client.query('DELETE FROM transcript_chunks WHERE user_id = $1 AND video_id = $2 AND chunk_type = \'transcript\'', [userId, videoId]);
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const vec = vectors[i];
         if (!vec) continue;
         const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
         await client.query(
-          `INSERT INTO transcript_chunks (id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at, chunk_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'transcript')`,
-          [newId(), videoId, i, chunk.text, chunk.start_ms, chunk.end_ms ?? null, blob, model, now],
+          `INSERT INTO transcript_chunks (id, user_id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at, chunk_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'transcript')`,
+          [newId(), userId, videoId, i, chunk.text, chunk.start_ms, chunk.end_ms ?? null, blob, model, now],
         );
       }
       await client.query('COMMIT');
@@ -97,7 +98,7 @@ export async function indexVideo(videoId: string): Promise<IndexResult> {
  * transcript chunks. start_ms/end_ms are 0/null — a summary isn't timestamped.
  * Idempotent: replaces any prior summary chunk for this video before inserting.
  */
-export async function indexSummary(videoId: string, summary: {
+export async function indexSummary(userId: string, videoId: string, summary: {
   tldr: string;
   key_points: string[];
   topics: string[];
@@ -119,11 +120,11 @@ export async function indexSummary(videoId: string, summary: {
       const now = Math.floor(Date.now() / 1000);
       const blob = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
       await client.query('BEGIN');
-      await client.query('DELETE FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'summary\'', [videoId]);
+      await client.query('DELETE FROM transcript_chunks WHERE user_id = $1 AND video_id = $2 AND chunk_type = \'summary\'', [userId, videoId]);
       await client.query(
-        `INSERT INTO transcript_chunks (id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at, chunk_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'summary')`,
-        [newId(), videoId, -1, text, 0, null, blob, model, now],
+        `INSERT INTO transcript_chunks (id, user_id, video_id, chunk_index, text, start_ms, end_ms, embedding, embed_model, created_at, chunk_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'summary')`,
+        [newId(), userId, videoId, -1, text, 0, null, blob, model, now],
       );
       await client.query('COMMIT');
     } catch (err) {
@@ -154,10 +155,10 @@ function buildSummaryChunkText(summary: { tldr: string; key_points: string[]; to
 }
 
 /** Whether a video has been indexed (transcript chunks exist in the store). */
-export async function isIndexed(videoId: string): Promise<boolean> {
+export async function isIndexed(userId: string, videoId: string): Promise<boolean> {
   const client = await getDb();
   try {
-    const { rows } = await client.query('SELECT 1 FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'transcript\' LIMIT 1', [videoId]);
+    const { rows } = await client.query('SELECT 1 FROM transcript_chunks WHERE user_id = $1 AND video_id = $2 AND chunk_type = \'transcript\' LIMIT 1', [userId, videoId]);
     return rows.length > 0;
   } finally {
     client.release();
@@ -165,10 +166,10 @@ export async function isIndexed(videoId: string): Promise<boolean> {
 }
 
 /** Count indexed transcript chunks for a video — useful for UI status. */
-export async function chunkCount(videoId: string): Promise<number> {
+export async function chunkCount(userId: string, videoId: string): Promise<number> {
   const client = await getDb();
   try {
-    const { rows } = await client.query('SELECT COUNT(*) as n FROM transcript_chunks WHERE video_id = $1 AND chunk_type = \'transcript\'', [videoId]);
+    const { rows } = await client.query('SELECT COUNT(*) as n FROM transcript_chunks WHERE user_id = $1 AND video_id = $2 AND chunk_type = \'transcript\'', [userId, videoId]);
     return Number(rows[0].n);
   } finally {
     client.release();
@@ -232,13 +233,13 @@ export interface SearchResult {
 /**
  * Search a video's chunks for the top-k most similar to `query`.
  */
-export async function search(videoId: string, query: string, k = 5): Promise<SearchResult[]> {
+export async function search(userId: string, videoId: string, query: string, k = 5): Promise<SearchResult[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query(
       `SELECT id, video_id, chunk_index, text, start_ms, end_ms, embedding
-       FROM transcript_chunks WHERE video_id = $1 ORDER BY chunk_index`,
-      [videoId],
+       FROM transcript_chunks WHERE user_id = $1 AND video_id = $2 ORDER BY chunk_index`,
+      [userId, videoId],
     );
 
     if (rows.length === 0) return [];
@@ -283,25 +284,26 @@ export async function search(videoId: string, query: string, k = 5): Promise<Sea
  * rows, instead of loading every channel's chunks and filtering in JS.
  */
 export async function searchAcross(
+  userId: string,
   query: string,
   k = 20,
   channelId?: string,
 ): Promise<TranscriptSearchResult[]> {
   const client = await getDb();
   try {
-    const params: (string | Buffer)[] = [];
-    let where = '';
+    const params: (string | Buffer)[] = [userId];
+    let where = 'WHERE tc.user_id = $1';
     if (channelId) {
       params.push(channelId);
-      where = 'WHERE v.channel_id = $1';
+      where += ` AND v.channel_id = $${params.length}`;
     }
     const { rows } = await client.query(
       `SELECT tc.text, tc.start_ms, tc.end_ms, tc.embedding, tc.chunk_type,
               v.video_id, v.title AS video_title, v.channel_id,
               c.title AS channel_title
        FROM transcript_chunks tc
-       JOIN videos v   ON v.video_id = tc.video_id
-       JOIN channels c  ON c.channel_id = v.channel_id
+       JOIN videos v   ON v.user_id = tc.user_id AND v.video_id = tc.video_id
+       JOIN channels c  ON c.user_id = v.user_id AND c.channel_id = v.channel_id
        ${where}
        ORDER BY tc.video_id, tc.chunk_index`,
       params,
@@ -368,15 +370,16 @@ export interface LibrarySearchOpts {
  * chunks), scored in JS.
  */
 export async function searchLibrary(
+  userId: string,
   query: string,
   k = 20,
   opts: LibrarySearchOpts = {},
 ): Promise<TranscriptSearchResult[]> {
   const client = await getDb();
   try {
-    const params: (string | Buffer)[] = [];
+    const params: (string | Buffer)[] = [userId];
     const joins: string[] = [];
-    const where: string[] = [];
+    const where: string[] = ['tc.user_id = $1'];
 
     if (opts.channelId) {
       params.push(opts.channelId);
@@ -384,12 +387,12 @@ export async function searchLibrary(
     }
     if (opts.folderId) {
       params.push(opts.folderId);
-      joins.push('JOIN channel_folders cf ON cf.channel_id = c.channel_id AND cf.folder_id = $' + params.length);
+      joins.push('JOIN channel_folders cf ON cf.user_id = c.user_id AND cf.channel_id = c.channel_id AND cf.folder_id = $' + params.length);
       where.push('c.hidden = 0');
     }
     if (opts.tagId) {
       params.push(opts.tagId);
-      joins.push('JOIN channel_tags ct ON ct.channel_id = c.channel_id AND ct.tag_id = $' + params.length);
+      joins.push('JOIN channel_tags ct ON ct.user_id = c.user_id AND ct.channel_id = c.channel_id AND ct.tag_id = $' + params.length);
       where.push('c.hidden = 0');
     }
     if (opts.chunkType) {
@@ -402,8 +405,8 @@ export async function searchLibrary(
               v.video_id, v.title AS video_title, v.channel_id,
               c.title AS channel_title
        FROM transcript_chunks tc
-       JOIN videos v   ON v.video_id = tc.video_id
-       JOIN channels c  ON c.channel_id = v.channel_id
+       JOIN videos v   ON v.user_id = tc.user_id AND v.video_id = tc.video_id
+       JOIN channels c  ON c.user_id = v.user_id AND c.channel_id = v.channel_id
        ${joins.join('\n       ')}
        ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
        ORDER BY tc.video_id, tc.chunk_index`,
@@ -450,15 +453,15 @@ export async function searchLibrary(
 // ----- segment persistence ----------------------------------------------------
 
 /** Save timestamped segments to Postgres (idempotent — replaces prior rows). */
-export async function saveSegments(videoId: string, segments: TranscriptSegment[]): Promise<void> {
+export async function saveSegments(userId: string, videoId: string, segments: TranscriptSegment[]): Promise<void> {
   const client = await getDb();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM transcript_segments WHERE video_id = $1', [videoId]);
+    await client.query('DELETE FROM transcript_segments WHERE user_id = $1 AND video_id = $2', [userId, videoId]);
     for (const seg of segments) {
       await client.query(
-        'INSERT INTO transcript_segments (video_id, seg_index, text, start_ms, end_ms) VALUES ($1, $2, $3, $4, $5)',
-        [videoId, seg.seg_index, seg.text, seg.start_ms, seg.end_ms ?? null],
+        'INSERT INTO transcript_segments (user_id, video_id, seg_index, text, start_ms, end_ms) VALUES ($1, $2, $3, $4, $5, $6)',
+        [userId, videoId, seg.seg_index, seg.text, seg.start_ms, seg.end_ms ?? null],
       );
     }
     await client.query('COMMIT');
@@ -471,12 +474,12 @@ export async function saveSegments(videoId: string, segments: TranscriptSegment[
 }
 
 /** Load cached timestamped segments for a video. Empty if not yet fetched. */
-export async function getSegments(videoId: string): Promise<TranscriptSegment[]> {
+export async function getSegments(userId: string, videoId: string): Promise<TranscriptSegment[]> {
   const client = await getDb();
   try {
     const { rows } = await client.query(
-      'SELECT * FROM transcript_segments WHERE video_id = $1 ORDER BY seg_index',
-      [videoId],
+      'SELECT * FROM transcript_segments WHERE user_id = $1 AND video_id = $2 ORDER BY seg_index',
+      [userId, videoId],
     );
     return rows.map((r: { seg_index: number; text: string; start_ms: number; end_ms: number | null }) => ({
       text: r.text,

@@ -63,28 +63,26 @@ function ensureSchema(): Promise<void> {
     const pool = getPool();
     const client = await pool.connect();
     try {
+      // TAV-68: the whole array runs in ONE transaction so the multi-user PK/FK
+      // surgery is atomic — a mid-migration failure (Neon blip, timeout) rolls
+      // back cleanly instead of leaving half-swapped constraints behind.
+      await client.query('BEGIN');
+      // Serialize concurrent cold starts: two serverless instances migrating
+      // at once would race on the constraint surgery. The lock is
+      // transaction-scoped and released on COMMIT; once every statement is a
+      // no-op it is held for milliseconds.
+      await client.query('SELECT pg_advisory_xact_lock(918273645::bigint)');
+      // The PK/FK swaps can exceed the pool's 8s statement timeout on a warm
+      // corpus. Raise it for this transaction only — SET LOCAL is scoped to
+      // the transaction and never leaks to the pooled connection on release.
+      await client.query("SET LOCAL statement_timeout = '120s'");
       for (const stmt of SCHEMA_STATEMENTS) {
         await client.query(stmt);
       }
-
-      // Seed default folders if none exist.
-      const { rows } = await client.query('SELECT COUNT(*) as n FROM folders');
-      const count = Number(rows[0].n);
-      if (count === 0) {
-        const now = Math.floor(Date.now() / 1000);
-        await client.query(
-          `INSERT INTO folders (id, name, color, position, created_at)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (name) DO NOTHING`,
-          ['seed-watch-later', 'Watch Later', '#5b9eff', 0, now],
-        );
-        await client.query(
-          `INSERT INTO folders (id, name, color, position, created_at)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (name) DO NOTHING`,
-          ['seed-reference', 'Reference', '#7c5cff', 1, now],
-        );
-      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
     } finally {
       client.release();
     }
