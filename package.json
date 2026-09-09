@@ -8,11 +8,12 @@
     "start": "next start",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && pnpm -C extension typecheck",
     "sync": "tsx scripts/sync-subscriptions.ts",
     "sync:videos": "tsx scripts/sync-videos.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "smoke:chat": "tsx scripts/smoke-chat.ts",
+    "smoke:extension": "tsx scripts/smoke-extension-api.ts",
     "test:rss": "tsx scripts/test-rss-parser.ts"
   },
   "dependencies": {
