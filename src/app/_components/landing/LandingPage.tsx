@@ -108,9 +108,31 @@ const features = [
     title: "Export & Integrations",
     desc: "Export your library to JSON or CSV. Send summaries to Readwise and other note-taking tools.",
   },
+  // TAV-68g: browser extension — what the Chrome/Brave extension actually
+  // does today (watch-page pill, context menus, popup search).
+  {
+    icon: "⚡",
+    title: "Summarize on YouTube Itself",
+    desc: "A 1minyt pill rides along on every watch, Shorts, and live page. One click renders the TL;DR, key points, and topics right on the page — no tab switching.",
+  },
+  {
+    icon: "🖱",
+    title: "Right-Click to Save",
+    desc: "\"Save to 1minyt\" and \"Summarize Later\" live in the right-click menu — on any YouTube video link, on any site, or on the page you're watching.",
+  },
+  {
+    icon: "🔎",
+    title: "Search From Anywhere",
+    desc: "The extension popup searches every indexed transcript in your library and links straight to the exact moment — from anywhere in your browser.",
+  },
 ];
 
-const featureSections = [
+const featureSections: {
+  title: string;
+  items: { icon: string; title: string; desc: string }[];
+  /** Optional CTA rendered under the section's card grid. */
+  cta?: { label: string; href: string; note?: string };
+}[] = [
   { title: "Your autoplay, finally", items: [features[0], features[1]] },
   { title: "Two ways to play", items: [features[2], features[3]] },
   { title: "Discovery from your own graph", items: [features[4], features[5]] },
@@ -120,6 +142,17 @@ const featureSections = [
   { title: "A research assistant over your subscriptions", items: [features[12], features[13], features[14], features[15]] },
   { title: "Your library, your system", items: [features[16], features[17]] },
   { title: "Plug into your workflow", items: [features[18], features[19]] },
+  // TAV-68g: extension download CTA — href is a placeholder until the
+  // Chrome Web Store listing is live; swap it when the URL exists.
+  {
+    title: "1minyt in your browser",
+    items: [features[20], features[21], features[22]],
+    cta: {
+      label: "Download for Chrome & Brave",
+      href: "#",
+      note: "Free • Chrome & Brave • Connects to your 1minyt account",
+    },
+  },
 ];
 
 export function LandingPage() {
@@ -276,6 +309,19 @@ export function LandingPage() {
                 </div>
               ))}
             </div>
+            {section.cta && (
+              <div className="landing-feature-cta">
+                <a
+                  className="btn btn-primary landing-btn-lg landing-btn-shine"
+                  href={section.cta.href}
+                >
+                  {section.cta.label} →
+                </a>
+                {section.cta.note && (
+                  <p className="landing-feature-cta-note">{section.cta.note}</p>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </section>

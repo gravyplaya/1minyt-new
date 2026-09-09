@@ -280,6 +280,25 @@
   line-height: 1.55;
 }
 
+/* Odd card count: the last card spans the full grid row (extension section) */
+.landing-feature-grid > .landing-feature-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+/* ----- Feature-section CTA (extension download, TAV-68) ----- */
+
+.landing-feature-cta {
+  margin-top: 28px;
+  padding-top: 28px;
+  border-top: 1px solid #1f1f26;
+  text-align: center;
+}
+.landing-feature-cta-note {
+  font-size: 12px;
+  color: #5a5a64;
+  margin-top: 12px;
+}
+
 /* ----- Final CTA ----- */
 
 .landing-final {
