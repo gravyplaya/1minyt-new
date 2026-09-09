@@ -77,7 +77,7 @@ Server actions live in `src/app/actions.ts` — one section per TAV ticket. Page
 | Topic mind map | TAV-66 (I) | `topics.ts` | /topics, TopicGraphView |
 | Paste a YouTube URL | TAV-67 | `youtube-url.ts`, `video-ingest.ts` (Innertube path = no sign-in) | HeaderBar PasteUrlBox, landing hero, /watch |
 | Multi-user sessions + isolation | TAV-68 | `auth.ts`, user_id on all tables, per-user repos/actions | HeaderBar Sign in/out, all pages scoped |
-| Browser extension | TAV-68 (a–f) | `src/app/api/extension/*` + `src/lib/extension-api.ts` | `extension/` — watch-page pill (content.ts), popup, options, context menus |
+| Browser extension | TAV-68 (a–g) | `src/app/api/extension/*` + `src/lib/extension-api.ts` | `extension/` — watch-page pill (content.ts), popup, options, context menus; landing feature section + download CTA (TAV-68g, LandingPage.tsx — href still a placeholder pending the Chrome Web Store listing) |
 
 ## Notes for future work
 
