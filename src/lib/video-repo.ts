@@ -83,7 +83,7 @@ export async function upsertVideo(userId: string, input: Omit<VideoRow, 'transcr
         $8, $9, $10, $11,
         $12, $13, $14, $15,
         $16, $17, $18, $19,
-        $20, $21
+        $20, $21, $22
       )`,
       [
         userId, input.video_id, input.channel_id, input.title, input.description,
@@ -638,8 +638,13 @@ export async function ensureChannelRow(
 ): Promise<void> {
   if (!channelId) return;
   const now = Math.floor(Date.now() / 1000);
+  // $3 (title, TEXT) must not be shared with the timestamp columns (INTEGER):
+  // Postgres deduces one type per parameter across all its positions and
+  // rejects the query with "inconsistent types deduced for parameter $3" when
+  // a TEXT slot and an INTEGER slot share an index. (Regression from the
+  // TAV-68 user_id prepend, which shifted title into the old timestamp slot.)
   const sql = `INSERT INTO channels (user_id, channel_id, title, synced_at, created_at, updated_at)
-               VALUES ($1, $2, $3, $3, $3, $3)
+               VALUES ($1, $2, $3, $4, $4, $4)
                ON CONFLICT (user_id, channel_id) DO NOTHING`;
   const params = [userId, channelId, channelTitle ?? channelId, now];
   if (client) {
