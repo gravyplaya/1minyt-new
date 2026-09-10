@@ -83,10 +83,30 @@ function sampleTorusKnot(count: number, radius: number): THREE.Vector3[] {
   return points;
 }
 
+/* TAV-69: flat torus ring — the calm ending formation. The knot
+   "unwinds" into this behind the final stop and the closing CTA. */
+function sampleTorusRing(count: number, radius: number, tube: number): THREE.Vector3[] {
+  const points: THREE.Vector3[] = [];
+  for (let i = 0; i < count; i++) {
+    const u = (i / count) * Math.PI * 2; // around the main ring
+    const v = (i * 2.399963) % (Math.PI * 2); // golden angle around the tube
+    const r = radius + tube * Math.cos(v);
+    points.push(
+      new THREE.Vector3(
+        r * Math.cos(u),
+        r * Math.sin(u),
+        tube * Math.sin(v),
+      ),
+    );
+  }
+  return points;
+}
+
 /* ============================================================
    Particle System
-   Morphs between sphere → text → torus knot → scatter
-   based on scroll progress.
+   Morphs between sphere → text → torus knot → ring → sphere
+   based on scroll progress. TAV-69: bands re-timed to the
+   five-stop landing tour (see docs/design/landing-redesign-TAV-69.md).
    ============================================================ */
 
 const PARTICLE_COUNT = 12000;
@@ -99,6 +119,7 @@ function ParticleField({ scrollRef }: { scrollRef: React.RefObject<number> }) {
     const textPoints = sampleTextPoints("1minyt", 220);
     const spherePoints = sampleSphere(PARTICLE_COUNT, 3.5);
     const knotPoints = sampleTorusKnot(PARTICLE_COUNT, 4);
+    const ringPoints = sampleTorusRing(PARTICLE_COUNT, 3.2, 0.5);
 
     // Pad text points to PARTICLE_COUNT by cycling
     const textPadded: THREE.Vector3[] = [];
@@ -133,6 +154,7 @@ function ParticleField({ scrollRef }: { scrollRef: React.RefObject<number> }) {
         sphere: spherePoints,
         text: textPadded,
         knot: knotPoints,
+        ring: ringPoints,
       },
       randomOffsets: rand,
     };
@@ -145,36 +167,43 @@ function ParticleField({ scrollRef }: { scrollRef: React.RefObject<number> }) {
     const t = state.clock.elapsedTime;
     const scroll = scrollRef.current; // 0 → 1 over full page scroll
 
-    // Define morph keyframes:
-    // 0.00–0.15  sphere → text (hero text assembles)
-    // 0.15–0.40  text holds, gentle breathing
-    // 0.40–0.60  text → torus knot (3D object forms)
-    // 0.60–0.85  knot rotates, distorts
-    // 0.85–1.00  scatter to particles
+    // Define morph keyframes (TAV-69, tuned in-browser to real heights:
+    // doc 5103px / viewport 900px at 1440w — stop centers land at
+    // ~0.35 / 0.48 / 0.62 / 0.79 / 0.95 of scroll):
+    // 0.00–0.22  sphere → text (hero wordmark assembles)
+    // 0.22–0.42  text holds, gentle breathing (stop 1 — summaries)
+    // 0.42–0.56  text → torus knot (stop 2 — the graph)
+    // 0.56–0.88  knot holds, rotating (stops 3–4 — research, extension)
+    // 0.88–0.97  knot → ring (stop 5 — the queue; the system settles)
+    // 0.97–1.00  ring → sphere (final CTA — closing exhale)
     let blend = 0;
     let phaseA: keyof typeof morphTargets = "sphere";
     let phaseB: keyof typeof morphTargets = "text";
 
-    if (scroll < 0.15) {
-      blend = scroll / 0.15;
+    if (scroll < 0.22) {
+      blend = scroll / 0.22;
       phaseA = "sphere";
       phaseB = "text";
-    } else if (scroll < 0.40) {
+    } else if (scroll < 0.42) {
       blend = 0;
       phaseA = "text";
       phaseB = "text";
-    } else if (scroll < 0.60) {
-      blend = (scroll - 0.40) / 0.20;
+    } else if (scroll < 0.56) {
+      blend = (scroll - 0.42) / 0.14;
       phaseA = "text";
       phaseB = "knot";
-    } else if (scroll < 0.85) {
+    } else if (scroll < 0.88) {
       blend = 0;
       phaseA = "knot";
       phaseB = "knot";
-    } else {
-      blend = (scroll - 0.85) / 0.15;
+    } else if (scroll < 0.97) {
+      blend = (scroll - 0.88) / 0.09;
       phaseA = "knot";
-      phaseB = "sphere"; // scatter back to random sphere distribution
+      phaseB = "ring";
+    } else {
+      blend = (scroll - 0.97) / 0.03;
+      phaseA = "ring";
+      phaseB = "sphere";
     }
 
     const posAttr = points.geometry.attributes.position as THREE.BufferAttribute;
@@ -199,9 +228,20 @@ function ParticleField({ scrollRef }: { scrollRef: React.RefObject<number> }) {
       y += randomOffsets[ri + 1] * noise;
       z += randomOffsets[ri + 2] * noise;
 
-      // Rotation of entire formation during knot phase
-      if (scroll >= 0.40 && scroll < 0.85) {
+      // Rotation of entire formation during knot phase. TAV-69: the
+      // rotation eases out through the knot→ring unwind (0.88–0.97)
+      // so the ring arrives calm instead of spinning.
+      if (scroll >= 0.42 && scroll < 0.88) {
         const angle = t * 0.3;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const nx = x * cos - z * sin;
+        const nz = x * sin + z * cos;
+        x = nx;
+        z = nz;
+      } else if (scroll >= 0.88 && scroll < 0.97) {
+        const ease = 1 - (scroll - 0.88) / 0.09; // 1 → 0
+        const angle = t * 0.3 * ease;
         const cos = Math.cos(angle);
         const sin = Math.sin(angle);
         const nx = x * cos - z * sin;
@@ -218,7 +258,7 @@ function ParticleField({ scrollRef }: { scrollRef: React.RefObject<number> }) {
     posAttr.needsUpdate = true;
 
     // Gentle group rotation on hero
-    if (scroll < 0.40) {
+    if (scroll < 0.42) {
       points.rotation.y = Math.sin(t * 0.15) * 0.1;
       points.rotation.x = Math.cos(t * 0.1) * 0.05;
     } else {
@@ -242,6 +282,40 @@ function ParticleField({ scrollRef }: { scrollRef: React.RefObject<number> }) {
     return c;
   }, []);
 
+  // TAV-69: per-stop tint. The per-vertex blue→purple gradient is
+  // static; the material color multiplies it, so lerping the material
+  // between white and a subtle tint shifts the whole formation's mood
+  // per stop without touching 12k vertices per frame.
+  const materialRef = useRef<THREE.PointsMaterial>(null);
+  const tintWhite = useMemo(() => new THREE.Color("#ffffff"), []);
+  const tintCool = useMemo(() => new THREE.Color("#c9e8ff"), []);
+  const tintWarm = useMemo(() => new THREE.Color("#e6dcff"), []);
+  const tintWork = useMemo(() => new THREE.Color(), []);
+
+  useFrame(() => {
+    const mat = materialRef.current;
+    if (!mat) return;
+    const scroll = scrollRef.current;
+
+    // Stops 2–3 (graph + research, ~0.42–0.70): cool shift.
+    // Stop 5 → final CTA (~0.88–1.0): warm settle.
+    if (scroll < 0.42 || scroll >= 0.97) {
+      tintWork.copy(tintWhite);
+    } else if (scroll < 0.70) {
+      const k = Math.min(1, (scroll - 0.42) / 0.14);
+      tintWork.copy(tintWhite).lerp(tintCool, k * 0.6);
+    } else {
+      const k = Math.min(1, (scroll - 0.70) / 0.18);
+      tintWork.copy(tintCool).lerp(tintWarm, k);
+      if (scroll >= 0.88) {
+        // ease the warm tint back out through the final CTA
+        const e = Math.min(1, (scroll - 0.88) / 0.12);
+        tintWork.lerp(tintWhite, e * 0.5);
+      }
+    }
+    mat.color.copy(tintWork);
+  });
+
   return (
     <points ref={pointsRef}>
       <bufferGeometry>
@@ -257,6 +331,7 @@ function ParticleField({ scrollRef }: { scrollRef: React.RefObject<number> }) {
         />
       </bufferGeometry>
       <pointsMaterial
+        ref={materialRef}
         size={0.035}
         vertexColors
         transparent
@@ -292,8 +367,10 @@ function DistortIco({ scrollRef }: { scrollRef: React.RefObject<number> }) {
     const t = state.clock.elapsedTime;
     const scroll = scrollRef.current;
 
-    // Only visible in mid-scroll range
-    const visibility = scroll > 0.30 && scroll < 0.90 ? 1 : 0;
+    // Only visible in mid-scroll range. TAV-69: re-timed to the tour —
+    // visible through the knot phase (graph → extension stops), out
+    // before the ring settles in for the final stop and CTA.
+    const visibility = scroll > 0.48 && scroll < 0.86 ? 1 : 0;
     mesh.visible = visibility > 0;
 
     if (!mesh.visible) return;
