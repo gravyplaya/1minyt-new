@@ -61,12 +61,15 @@
      recipe as the stop panels below: dark translucent fill + backdrop
      blur, so particles glow softly at the edges instead of speckling
      the letters. */
+  /* NOTE: no -webkit-backdrop-filter here — Turbopack's CSS pipeline
+     (lightningcss) drops BOTH declarations when the prefixed duplicate
+     is present, leaving no blur at all. Standard-only survives; older
+     Safari degrades to the dark fill alone. */
   padding: 40px 44px 34px;
   background: rgba(10, 10, 12, 0.55);
   border: 1px solid rgba(42, 42, 51, 0.55);
   border-radius: 24px;
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
 }
 
@@ -258,7 +261,7 @@
   margin-bottom: 44px;
 }
 
-/* One stop = ghost numeral + kicker + headline + sub + panel + chips */
+/* One stop = ghost numeral + heading card + panel + chips */
 .landing-stop {
   position: relative;
   margin-bottom: 72px;
@@ -286,6 +289,24 @@
   pointer-events: none;
 }
 
+/* TAV-69 review: glass scrim behind each stop's heading block
+   (kicker + title + sub), same recipe as the hero content panel.
+   The particle formation lands directly behind these lines as it
+   morphs between stops; bare copy speckled through with bright dots.
+   A translucent fill + backdrop blur keeps the dots glowing softly
+   around the card instead of cutting through the letters. */
+.landing-stop-head {
+  position: relative;
+  max-width: 760px;
+  margin: 0 auto 26px;
+  padding: 26px 36px 24px;
+  background: rgba(10, 10, 12, 0.55);
+  border: 1px solid rgba(42, 42, 51, 0.55);
+  border-radius: 20px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
 .landing-stop-kicker {
   font-size: 12px;
   font-weight: 700;
@@ -310,6 +331,10 @@
   max-width: 620px;
   margin: 0 auto 24px;
   text-shadow: 0 1px 20px rgba(0, 0, 0, 0.5);
+}
+/* Inside the heading card the sub is the last element — no bottom gap */
+.landing-stop-head .landing-stop-sub {
+  margin-bottom: 0;
 }
 
 /* ----- Panels: the new cards ----- */
@@ -830,6 +855,17 @@
   padding: 40px 32px 104px;
   text-align: center;
 }
+/* Same glass scrim as the hero and the stop heading cards — the
+   ring→sphere exhale plays directly behind this block. */
+.landing-final-card {
+  position: relative;
+  padding: 36px 40px 34px;
+  background: rgba(10, 10, 12, 0.55);
+  border: 1px solid rgba(42, 42, 51, 0.55);
+  border-radius: 24px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
 .landing-final h2 {
   font-size: 30px;
   font-weight: 700;
@@ -882,6 +918,11 @@
     font-size: 64px;
     top: -36px;
   }
+  .landing-stop-head {
+    padding: 20px 18px 18px;
+    border-radius: 16px;
+    margin-bottom: 20px;
+  }
   .landing-stop-title {
     font-size: 21px;
   }
@@ -906,6 +947,10 @@
   }
   .landing-stops {
     padding: 0 16px 60px;
+  }
+  .landing-final-card {
+    padding: 26px 22px 24px;
+    border-radius: 18px;
   }
 }
 

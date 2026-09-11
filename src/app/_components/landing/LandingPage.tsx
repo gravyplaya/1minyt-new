@@ -231,9 +231,11 @@ export function LandingPage() {
               <div className="landing-stop-num" aria-hidden="true">
                 0{i + 1}
               </div>
-              <div className="landing-stop-kicker">{stop.kicker}</div>
-              <h3 className="landing-stop-title">{stop.title}</h3>
-              <p className="landing-stop-sub">{stop.sub}</p>
+              <div className="landing-stop-head">
+                <div className="landing-stop-kicker">{stop.kicker}</div>
+                <h3 className="landing-stop-title">{stop.title}</h3>
+                <p className="landing-stop-sub">{stop.sub}</p>
+              </div>
               <Panel />
               <div className="landing-chip-row">
                 {stop.chips.map((chip) => (
@@ -249,17 +251,19 @@ export function LandingPage() {
 
       {/* Final CTA */}
       <section className="landing-final landing-reveal">
-        <h2>Ready to watch your way?</h2>
-        <p>
-          Connect your YouTube account in seconds. Get an Intelligent Queue
-          that actually knows what you&apos;ve seen — and what&apos;s next.
-        </p>
-        <a
-          className="btn btn-primary landing-btn-lg landing-btn-shine"
-          href="/api/oauth/start"
-        >
-          Connect YouTube →
-        </a>
+        <div className="landing-final-card">
+          <h2>Ready to watch your way?</h2>
+          <p>
+            Connect your YouTube account in seconds. Get an Intelligent Queue
+            that actually knows what you&apos;ve seen — and what&apos;s next.
+          </p>
+          <a
+            className="btn btn-primary landing-btn-lg landing-btn-shine"
+            href="/api/oauth/start"
+          >
+            Connect YouTube →
+          </a>
+        </div>
       </section>
     </main>
   );
