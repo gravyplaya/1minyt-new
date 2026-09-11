@@ -55,6 +55,19 @@
 
 .landing-hero-content {
   max-width: 720px;
+  /* TAV-69 review: glass scrim behind the hero copy. As soon as you scroll,
+     the sphere→wordmark morph assembles thousands of particles directly
+     behind this text and the bare copy lost legibility against it. Same
+     recipe as the stop panels below: dark translucent fill + backdrop
+     blur, so particles glow softly at the edges instead of speckling
+     the letters. */
+  padding: 40px 44px 34px;
+  background: rgba(10, 10, 12, 0.55);
+  border: 1px solid rgba(42, 42, 51, 0.55);
+  border-radius: 24px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
 }
 
 .landing-badge {
@@ -107,6 +120,24 @@
 .landing-paste {
   max-width: 540px;
   margin: 0 auto 24px;
+}
+
+/* Hero paste box: the input must own the full row on phones — side-by-side
+   with the button it clipped its placeholder below ~560px. The paste row is
+   the PasteUrlBox root div; scope by .landing-paste so the header variant
+   (which fits fine) is untouched. */
+@media (max-width: 560px) {
+  .landing-paste > div {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .landing-paste input {
+    width: 100%;
+    flex: none;
+  }
+  .landing-paste button {
+    width: 100%;
+  }
 }
 
 .landing-paste-note {
@@ -833,6 +864,10 @@
   .landing-hero {
     padding: 60px 20px 24px;
     min-height: 100vh;
+  }
+  .landing-hero-content {
+    padding: 26px 20px 22px;
+    border-radius: 18px;
   }
   .landing-h1 {
     font-size: 34px;
