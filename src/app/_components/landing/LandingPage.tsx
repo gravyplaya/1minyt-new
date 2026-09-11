@@ -3,155 +3,84 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef } from "react";
 import { PasteUrlBox } from "../PasteUrlBox";
+import {
+  AgentPanel,
+  BrowserPanel,
+  GraphPanel,
+  QueuePanel,
+  SummaryPanel,
+} from "./StopPanels";
 import "./landing.css";
 
 const Scene3D = dynamic(() => import("./Scene3D"), { ssr: false });
 
-const features = [
-  {
-    icon: "▶",
-    title: "Intelligent Queue",
-    desc: "Stop re-watching the same videos. Our queue ranks what's next using your subscriptions, play history, summary topics, and reference graph — not YouTube's global average.",
-  },
-  {
-    icon: "⏭",
-    title: "Autoplay That Respects You",
-    desc: "When a video ends, it ends — nothing auto-plays. Your Up Next queue is right there when you want it, transparent and editable — not a black box optimizing someone else's watch time.",
-  },
-  {
-    icon: "🎬",
-    title: "Watch Tab",
-    desc: "A player-first surface: full-width 16:9 player, a Now Playing panel with summaries, chapters, chat, and references, plus an Up Next queue you control.",
-  },
-  {
-    icon: "🎵",
-    title: "Music Tab",
-    desc: "A dedicated listening surface for music channels. Audio-first — no transcripts, no chat, no summaries. Just your tracks, queued by what you actually listen to.",
-  },
-  {
-    icon: "🔗",
-    title: "Reference Graph Queue",
-    desc: "Your summaries cite each other — a private knowledge graph of what your subscriptions collectively think matters. Turn those citations into an instant themed queue.",
-  },
-  {
-    icon: "🎛",
-    title: "Queue Controls",
-    desc: "Drag to reorder. Skip what you don't want. Pin a video to play next. Shuffle for serendipity. Push to Summarize Later. The queue is yours.",
-  },
-  {
-    icon: "📥",
-    title: "Smart Inbox",
-    desc: "New videos from your subscriptions land in a dedicated inbox. Filter, sort, and triage what's worth your time — then send straight to your Watch queue.",
-  },
-  {
-    icon: "📋",
-    title: "Weekly Digests",
-    desc: "Generate digests that condense your recent subscriptions into a single readable briefing.",
-  },
-  {
-    icon: "✦",
-    title: "AI Summaries",
-    desc: "One-click summaries extract the key points from any video. Save the gist without watching the whole thing.",
-  },
-  {
-    icon: "★",
-    title: "Saved Summaries",
-    desc: "Star important summaries for quick access. Your personal knowledge base of video insights.",
-  },
-  {
-    icon: "🔍",
-    title: "Transcript Search",
-    desc: "Search across every indexed transcript. Results link straight to the exact moment in the video.",
-  },
-  {
-    icon: "💬",
-    title: "Chat with Videos",
-    desc: "Ask questions about a video and get answers grounded in the transcript, with timestamp citations.",
-  },
-  {
-    icon: "🌐",
-    title: "Chat with Your Library",
-    desc: "Stop chatting one video at a time. Ask anything across every indexed video — scoped to a folder, tag, or channel — with sources linking back to each moment.",
-  },
-  {
-    icon: "🕵",
-    title: "Deep Research Agent",
-    desc: "Flip on agent mode and the assistant searches transcripts, summaries, and channel profiles itself — planning multi-step answers like \"which of my channels covered X, and did any disagree?\"",
-  },
-  {
-    icon: "🧠",
-    title: "Channel Memory",
-    desc: "Distill any channel's summaries into a long-term profile — its beat, perspective, and recurring themes — that chat uses as context when you ask about that channel.",
-  },
-  {
-    icon: "🕸",
-    title: "Topic Mind Map",
-    desc: "Every summary feeds a living topic graph. See what your subscriptions collectively talk about, how ideas connect, and jump from a topic straight to its videos.",
-  },
-  {
-    icon: "🗂",
-    title: "Folders & Tags",
-    desc: "Organize channels into folders and tag them for cross-cutting views. Filter music channels automatically.",
-  },
-  {
-    icon: "🔖",
-    title: "Summarize Later Queue",
-    desc: "Bookmark videos for later summarization. Build your reading list, then process them in batches.",
-  },
-  {
-    icon: "📊",
-    title: "Metrics",
-    desc: "See subscription counts, video totals, and summarization activity at a glance.",
-  },
-  {
-    icon: "📤",
-    title: "Export & Integrations",
-    desc: "Export your library to JSON or CSV. Send summaries to Readwise and other note-taking tools.",
-  },
-  // TAV-68g: browser extension — what the Chrome/Brave extension actually
-  // does today (watch-page pill, context menus, popup search).
-  {
-    icon: "⚡",
-    title: "Summarize on YouTube Itself",
-    desc: "A 1minyt pill rides along on every watch, Shorts, and live page. One click renders the TL;DR, key points, and topics right on the page — no tab switching.",
-  },
-  {
-    icon: "🖱",
-    title: "Right-Click to Save",
-    desc: "\"Save to 1minyt\" and \"Summarize Later\" live in the right-click menu — on any YouTube video link, on any site, or on the page you're watching.",
-  },
-  {
-    icon: "🔎",
-    title: "Search From Anywhere",
-    desc: "The extension popup searches every indexed transcript in your library and links straight to the exact moment — from anywhere in your browser.",
-  },
-];
+/* TAV-69: landing redesign — the page is a walkthrough, not a catalog.
+   Five stops, one idea each, told with a stylized product panel.
+   All 23 former feature cards are represented: most demoted from
+   "card with a paragraph" to a chip or to content inside a panel.
+   Full mapping: docs/design/landing-redesign-TAV-69.md
+   (approved with one amendment: the Queue stop runs last). */
 
-const featureSections: {
+const stops: {
+  kicker: string;
   title: string;
-  items: { icon: string; title: string; desc: string }[];
-  /** Optional CTA rendered under the section's card grid. */
-  cta?: { label: string; href: string; note?: string };
+  sub: string;
+  Panel: () => React.JSX.Element;
+  chips: string[];
 }[] = [
-  { title: "Your autoplay, finally", items: [features[0], features[1]] },
-  { title: "Two ways to play", items: [features[2], features[3]] },
-  { title: "Discovery from your own graph", items: [features[4], features[5]] },
-  { title: "Never miss what matters", items: [features[6], features[7]] },
-  { title: "Understand videos in minutes", items: [features[8], features[9]] },
-  { title: "Find anything, ask anything", items: [features[10], features[11]] },
-  { title: "A research assistant over your subscriptions", items: [features[12], features[13], features[14], features[15]] },
-  { title: "Your library, your system", items: [features[16], features[17]] },
-  { title: "Plug into your workflow", items: [features[18], features[19]] },
-  // TAV-68g: extension download CTA — href is a placeholder until the
-  // Chrome Web Store listing is live; swap it when the URL exists.
   {
+    kicker: "Summaries",
+    title: "Understand any video in minutes",
+    sub: "One click pulls the TL;DR, key points, chapters, and topics out of any video. Ask follow-ups and get answers grounded in the transcript, with citations that jump to the exact second.",
+    Panel: SummaryPanel,
+    chips: [
+      "Saved summaries — star what matters",
+      "Chapters",
+      "Summarize Later reading list",
+    ],
+  },
+  {
+    kicker: "The Graph",
+    title: "Everything is connected",
+    sub: "Your summaries cite each other. Every video you understand makes the next one easier to find — a private knowledge graph of what your subscriptions collectively think matters.",
+    Panel: GraphPanel,
+    chips: ["Topic mind map", "Channel memory", "Folders & tags"],
+  },
+  {
+    kicker: "Deep Research",
+    title: "A research assistant over your library",
+    sub: "Flip on agent mode and ask across everything you've indexed: which of your channels covered this, and did any of them disagree? The assistant searches transcripts, summaries, and channel profiles itself — then shows its work.",
+    Panel: AgentPanel,
+    chips: [
+      "Transcript search — to the exact second",
+      "Chat with a single video",
+      "Scoped to folder, tag, or channel",
+      "Weekly digests",
+    ],
+  },
+  {
+    kicker: "The Extension",
     title: "1minyt in your browser",
-    items: [features[20], features[21], features[22]],
-    cta: {
-      label: "Download for Chrome & Brave",
-      href: "#",
-      note: "Free • Chrome & Brave • Connects to your 1minyt account",
-    },
+    sub: "A 1minyt pill rides along on every watch page. One click renders the TL;DR right on YouTube — no tab switching. Right-click any video link anywhere to save it or queue it for later.",
+    Panel: BrowserPanel,
+    chips: [
+      "Right-click to save",
+      "Search from anywhere",
+      "Export & Readwise",
+      "Metrics",
+    ],
+  },
+  {
+    kicker: "The Queue",
+    title: "Your autoplay, finally yours",
+    sub: "1minyt ranks what plays next from your own attention — subscriptions, history, topics, the references between your summaries. When a video ends, it ends. What's next is your call, and the queue tells you why.",
+    Panel: QueuePanel,
+    chips: [
+      "Watch tab — player-first",
+      "Music tab — audio only",
+      "Drag, pin, skip, shuffle",
+      "Smart Inbox — triage before it queues",
+    ],
   },
 ];
 
@@ -255,9 +184,9 @@ export function LandingPage() {
             </a>
             <a
               className="btn landing-btn-lg landing-btn-outline"
-              href="#features"
+              href="#tour"
             >
-              See features
+              Take the tour ↓
             </a>
           </div>
           <p className="landing-fine-print">
@@ -285,45 +214,37 @@ export function LandingPage() {
         ))}
       </section>
 
-      {/* Feature sections */}
-      <section className="landing-features" id="features">
+      {/* TAV-69: the five-stop tour. One idea per stop, a stylized
+          product panel as the hero of each, chips for everything else. */}
+      <section className="landing-stops" id="tour">
         <h2 className="landing-section-kicker landing-reveal">
           A player that ranks what you watch, not what YouTube wants you to watch
         </h2>
-        {featureSections.map((section, i) => (
-          <div
-            key={section.title}
-            className="landing-feature-section landing-reveal"
-            style={{ "--d": Math.min(i, 4) } as React.CSSProperties}
-          >
-            <div className="landing-feature-num">0{i + 1} / 0{featureSections.length}</div>
-            <h3 className="landing-feature-title">{section.title}</h3>
-            <div className="landing-feature-grid">
-              {section.items.map((f) => (
-                <div className="landing-feature-card" key={f.title}>
-                  <div className="landing-feature-icon">{f.icon}</div>
-                  <div>
-                    <h4>{f.title}</h4>
-                    <p>{f.desc}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {section.cta && (
-              <div className="landing-feature-cta">
-                <a
-                  className="btn btn-primary landing-btn-lg landing-btn-shine"
-                  href={section.cta.href}
-                >
-                  {section.cta.label} →
-                </a>
-                {section.cta.note && (
-                  <p className="landing-feature-cta-note">{section.cta.note}</p>
-                )}
+        {stops.map((stop, i) => {
+          const Panel = stop.Panel;
+          return (
+            <div
+              key={stop.title}
+              className="landing-stop landing-reveal"
+              style={{ "--d": Math.min(i, 4) } as React.CSSProperties}
+            >
+              <div className="landing-stop-num" aria-hidden="true">
+                0{i + 1}
               </div>
-            )}
-          </div>
-        ))}
+              <div className="landing-stop-kicker">{stop.kicker}</div>
+              <h3 className="landing-stop-title">{stop.title}</h3>
+              <p className="landing-stop-sub">{stop.sub}</p>
+              <Panel />
+              <div className="landing-chip-row">
+                {stop.chips.map((chip) => (
+                  <span className="landing-chip" key={chip}>
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </section>
 
       {/* Final CTA */}

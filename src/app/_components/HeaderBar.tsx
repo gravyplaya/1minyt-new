@@ -36,6 +36,14 @@ export function HeaderBar({
         padding: '12px 24px',
         borderBottom: '1px solid #2a2a33',
         background: '#0a0a0c',
+        // TAV-69: the landing page renders fixed layers (WebGL canvas at
+        // z-index 0, vignette at 1, content at 2). A static header paints
+        // below ALL of them — particles and the vignette's top gradient
+        // washed over this bar on `/` signed-out. Positioning the header
+        // with z-index 10 lifts it above every landing layer; on app
+        // pages nothing changes (nothing there paints above the header).
+        position: 'relative',
+        zIndex: 10,
       }}
     >
       <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#e7e7ea', textDecoration: 'none' }}>
