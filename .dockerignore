@@ -1,0 +1,39 @@
+# Keep the build context small and secret-free. The image needs only the
+# dependency manifests, workspace config, src/, public/, and the Next config
+# files — everything else here is local scratch, VCS data, or stale artifacts
+# that get rebuilt inside the image.
+
+# secrets — never enter the build context
+.env*
+
+# vcs + local agent scratch
+.git
+.gitignore
+.DS_Store
+.multica
+.delta
+.agent_context
+.hermes
+.shipstudio
+
+# stale build output / deps — built fresh inside the image
+.next
+node_modules
+**/node_modules
+*.tsbuildinfo
+extension/.output
+extension/.wxt
+extension/dist
+
+# not needed inside the image
+data
+docs
+scripts
+logo-mockups.html
+README.md
+AGENTS.md
+ABOUT.md
+description.md
+eslint.config.mjs
+netlify.toml
+pnpm-lock-backup*

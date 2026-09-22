@@ -16,12 +16,18 @@
  *
  * Conversation history persists per scope string in library_chat_messages
  * (see library-chat-repo.ts).
+ *
+ * TAV-70: both retrieval paths (standard RAG and the agent's search tools)
+ * pull a wide cosine shortlist and re-rank it with the JEV decision model
+ * (decision.ts rerankByRelevance) before slicing to the final k — silently
+ * skipped when JEV is unavailable.
  */
 
 import { searchLibrary } from './vector-store';
 import { listChannels } from './repo';
 import { loadDossier } from './dossier';
 import { listVideosByChannel } from './video-repo';
+import { rerankByRelevance } from './decision';
 import type { ChatScopeKind, LibraryChatCitation, LibraryChatResult } from './types';
 
 /** Prior turns only need role + content — any message row shape satisfies this. */
@@ -34,6 +40,8 @@ const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 const DEFAULT_CHAT_MODEL = process.env.CHAT_MODEL?.trim() || 'openrouter/free';
 const MAX_HISTORY = 10;
 const STANDARD_K = 14;
+/** TAV-70: cosine shortlist fed to the JEV re-ranker; the final prompt keeps STANDARD_K. */
+const RETRIEVAL_POOL = 40;
 const MAX_TOOL_ROUNDS = 4;
 const MAX_CITATIONS = 12;
 
@@ -92,7 +100,10 @@ export async function chatWithLibrary(input: LibraryChatInput): Promise<LibraryC
   if (!apiKey) throw new Error('Missing OPENROUTER_API_KEY — set it in .env to enable chat.');
 
   const scope = parseScope(input.scope);
-  const hits = await searchLibrary(input.userId, input.question, STANDARD_K, scopeToFilter(scope));
+  // TAV-70: pull a wide cosine shortlist, let JEV re-rank by how well each
+  // passage answers the question, keep the top STANDARD_K for the prompt.
+  const pool = await searchLibrary(input.userId, input.question, RETRIEVAL_POOL, scopeToFilter(scope));
+  const hits = (await rerankByRelevance(input.question, pool)).slice(0, STANDARD_K);
   return completeLibraryAnswer({ userId: input.userId, apiKey, question: input.question, scope, hits, history: input.history });
 }
 
@@ -414,7 +425,9 @@ async function executeTool(
       if (!query) return JSON.stringify({ results: [], note: 'Empty query.' });
       const limit = clamp(Number(args.limit ?? 6) || 6, 1, 12);
       const chunkType = name === 'search_summaries' ? 'summary' : 'transcript';
-      const hits = await searchLibrary(userId, query, limit, { ...filter, chunkType });
+      // TAV-70: 3x cosine shortlist, JEV re-rank, keep the requested limit.
+      const pool = await searchLibrary(userId, query, limit * 3, { ...filter, chunkType });
+      const hits = (await rerankByRelevance(query, pool)).slice(0, limit);
       for (const h of hits) {
         if (citations.length >= 24) break;
         citations.push({

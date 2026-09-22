@@ -37,6 +37,7 @@ import { fetchTopComments, fetchChannelPlaylists, fetchPlaylistVideos } from '@/
 import { searchChannelCatalog } from '@/lib/channel-search';
 import { detectChapters } from '@/lib/chapters';
 import { indexVideo, indexSummary, isIndexed, chunkCount, searchAcross, getSegments } from '@/lib/vector-store';
+import { rerankByRelevance } from '@/lib/decision';
 import { chatWithVideo } from '@/lib/chat';
 import { chatWithLibrary, chatWithLibraryAgent, parseScope } from '@/lib/library-chat';
 import { saveLibraryChatMessage, listLibraryChatMessages, clearLibraryChat } from '@/lib/library-chat-repo';
@@ -643,7 +644,9 @@ export async function searchTranscriptsAction(query: string): Promise<Transcript
   const userId = await requireUserId();
   const q = query.trim();
   if (!q) return [];
-  return searchAcross(userId, q, 20);
+  // TAV-70: cosine shortlist of 40, JEV re-rank, keep the top 20.
+  const pool = await searchAcross(userId, q, 40);
+  return (await rerankByRelevance(q, pool)).slice(0, 20);
 }
 
 // ----- TAV-25: Channel back-catalog search ------------------------------------
@@ -693,8 +696,9 @@ export async function searchChannelCatalogAction(
 
     // Transcripts: reuse the existing cross-video index, scoped to this channel
     // so the cosine scoring only runs over this channel's chunks (not every
-    // channel's), then keep the top 20.
-    const transcripts = await searchAcross(userId, q, 20, channelId);
+    // channel's). TAV-70: re-ranked by JEV before keeping the top 20.
+    const pool = await searchAcross(userId, q, 40, channelId);
+    const transcripts = (await rerankByRelevance(q, pool)).slice(0, 20);
 
     return { ok: true, channelId, catalog, transcripts };
   } catch (err) {

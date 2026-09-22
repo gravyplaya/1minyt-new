@@ -54,44 +54,63 @@ the data model and UI in this repo.
 | Layer        | Choice                                  | Why                                       |
 |--------------|------------------------------------------|--------------------------------------------|
 | App          | Next.js 16 (App Router, RSC)            | Server-rendered, fast, no API routes for most UI |
-| Database     | PostgreSQL (Neon)                       | Serverless Postgres — works on Netlify |
+| Database     | PostgreSQL (Neon)                       | Serverless Postgres — works on any host |
 | Auth         | Google OAuth (`google-auth-library`)     | `subscriptions.list?mine=true` requires it |
 | API          | `googleapis` YouTube Data API v3         | First-party SDK, no scraping                |
 | LLM          | OpenRouter (`/chat/completions`)         | OpenAI-compatible, free tier available |
 | Styling      | Tailwind 3 + a few CSS variables         | Dark UI without a UI library                |
 
-## Deploy to Netlify
+## Deploy to Dokploy (Docker)
 
-This app is configured for Netlify deployment out of the box.
+The repo ships a production `Dockerfile`: multi-stage `pnpm build` → slim
+runner with `next start`, ffmpeg + yt-dlp baked in (the transcript fallback
+chain that never worked on Netlify, where those binaries didn't exist).
 
-### 1. Push to GitHub
+### 1. Create the project
+
+Pick the GitHub repo + `master` branch, build type **Dockerfile**, service
+port **3000**. No build-time env vars are needed — every route is
+force-dynamic, so the build never touches the DB.
+
+### 2. Environment variables
+
+Set under project → Environment (all runtime-only):
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Neon Postgres connection string (e.g. `postgresql://...?sslmode=require`) |
+| `YOUTUBE_CLIENT_ID` | Google OAuth client ID |
+| `YOUTUBE_CLIENT_SECRET` | Google OAuth client secret |
+| `YOUTUBE_REDIRECT_URI` | `https://<your-domain>/api/oauth/callback` |
+| `OPENROUTER_API_KEY` | OpenRouter API key (summaries + chat) |
+| `EXTENSION_API_KEY` | shared secret for the browser extension API (unset = extension routes 503) |
+| `CRON_SECRET` | required `x-cron-secret` header for POST /api/sync |
+
+Optional: `SUMMARY_MODEL`, `CHAT_MODEL`, `DECISION_MODEL`, `OPENAI_API_KEY` /
+`WHISPER_MODEL` (cloud Whisper), `SUPADATA_API_KEY` — see `.env.example`.
+
+The schema auto-creates on the first DB connection — no manual migration.
+
+### 3. Cron — subscription sync
+
+Dokploy → project → **Cron Jobs** → add a job (e.g. every 6 hours):
 
 ```bash
-git remote add origin <your-repo>
-git push -u origin main
+curl -fsS -X POST -H "x-cron-secret: $CRON_SECRET" http://127.0.0.1:${PORT:-3000}/api/sync
 ```
 
-### 2. Connect on Netlify
+Cron jobs run inside the app container, so `CRON_SECRET` resolves from the
+app's environment.
 
-1. Go to [netlify.com](https://app.netlify.com) → **Add new site** → **Import an existing project**.
-2. Pick your GitHub repo.
-3. Netlify will auto-detect Next.js via `netlify.toml`. Build command is `pnpm run build`, publish directory is `.next`.
-4. **Set environment variables** under Site settings → Environment variables:
+### 4. Domain cutover
 
-   | Variable | Value |
-   |----------|-------|
-   | `DATABASE_URL` | Your Neon Postgres connection string (e.g. `postgresql://...?sslmode=require`) |
-   | `YOUTUBE_CLIENT_ID` | Google OAuth client ID |
-   | `YOUTUBE_CLIENT_SECRET` | Google OAuth client secret |
-   | `YOUTUBE_REDIRECT_URI` | `https://your-site.netlify.app/api/oauth/callback` |
-   | `OPENROUTER_API_KEY` | OpenRouter API key (for summaries + chat) |
+Point the domain's DNS at Dokploy and you're done — the Google OAuth redirect
+URI is the same domain as before, so no Google Cloud Console changes are
+needed. Note: sign-in won't complete on the temporary Dokploy preview domain
+(redirect mismatch) until the real domain is attached; everything else can be
+verified there.
 
-5. **Deploy.** The schema auto-creates on first DB connection — no manual migration needed.
-
-### 3. Google OAuth redirect URI
-
-In Google Cloud Console → Credentials → your OAuth client, add:
-- `https://your-site.netlify.app/api/oauth/callback`
+After cutover, decommission the Netlify site and delete `netlify.toml`.
 
 ## Run it locally
 
@@ -175,7 +194,8 @@ pnpm run build      # Next.js production build
 ```
 ├── package.json
 ├── next.config.mjs
-├── netlify.toml           # Netlify deployment config
+├── Dockerfile             # production image (Dokploy)
+├── .dockerignore          # keeps secrets + scratch out of the build context
 ├── tailwind.config.ts
 ├── scripts/
 │   ├── smoke-test.ts       # exercises DB layer
