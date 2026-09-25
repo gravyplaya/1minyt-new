@@ -128,9 +128,14 @@ export function AgentPanel() {
   );
 }
 
-export function BrowserPanel() {
+/**
+ * TAV-68: the browser-window mock, shared by the landing page's Extension
+ * stop (BrowserPanel below) and the /extension explainer page — one visual,
+ * so the two pages can't drift apart.
+ */
+export function BrowserWindowMock() {
   return (
-    <div className="stop-panel" aria-label="Browser extension mock">
+    <>
       <div className="browser-chrome" aria-hidden="true">
         <span className="browser-dot" />
         <span className="browser-dot" />
@@ -158,13 +163,23 @@ export function BrowserPanel() {
           <div className="browser-ghost-row" />
         </div>
       </div>
+    </>
+  );
+}
+
+export function BrowserPanel() {
+  return (
+    <div className="stop-panel" aria-label="Browser extension mock">
+      <BrowserWindowMock />
 
       <div className="stop-panel-cta">
-        <a className="btn btn-primary landing-btn-lg landing-btn-shine" href="#">
-          Download for Chrome &amp; Brave →
+        {/* TAV-68 self-host path: the explainer page carries the install
+            steps and serves this deployment's built extension bundle. */}
+        <a className="btn btn-primary landing-btn-lg landing-btn-shine" href="/extension">
+          Get the extension →
         </a>
         <p className="stop-panel-cta-note">
-          Free • Chrome &amp; Brave • Connects to your 1minyt account
+          Free • Chrome &amp; Brave • Works with any 1minyt server
         </p>
       </div>
     </div>

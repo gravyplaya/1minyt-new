@@ -29,18 +29,26 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY extension/package.json extension/
 
 # --ignore-scripts: the only workspace postinstall is the extension's
-# `wxt prepare`, which loads the extension project (not shipped here — the
-# extension is built for the Chrome store, not this web deploy) and would fail
-# without its source. Nothing the Next build needs has an install script:
-# every native dep in the build path (sharp, @next/swc, Turbopack) ships
-# prebuilt platform binaries; esbuild/better-sqlite3/etc. are extension/lint
-# tooling only.
+# `wxt prepare`, which would fail here — extension/ holds only its manifest
+# at this point (no source). Everything the Next build needs has no install
+# script: every native dep in the build path (sharp, @next/swc, Turbopack)
+# ships prebuilt platform binaries. The extension's wxt/esbuild deps ARE
+# installed (workspace root hoists them) — its scripts are just not run yet.
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # Build inputs: source, static assets, and the config files Next/Tailwind/PostCSS read.
 COPY next.config.mjs postcss.config.mjs tailwind.config.ts tsconfig.json next-env.d.ts ./
 COPY src ./src
 COPY public ./public
+
+# TAV-68 (self-host): build the browser-extension bundle and park it where the
+# app serves it from (/extension/download reads public/extension/*.zip). WXT
+# needs the full extension/ source + its config files; `wxt zip` scaffolds
+# .wxt/ itself, so the skipped postinstall doesn't matter.
+COPY extension ./extension
+RUN pnpm -C extension zip \
+  && mkdir -p public/extension \
+  && cp extension/dist/*-chrome.zip public/extension/oneminyt-extension-chrome.zip
 
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
