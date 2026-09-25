@@ -27,6 +27,7 @@ export function Footer() {
           © {new Date().getFullYear()} 1minyt. All rights reserved.
         </span>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <FooterLink href="/extension">Browser extension</FooterLink>
           <FooterLink href="/terms">Terms of Service</FooterLink>
           <FooterLink href="/privacy">Privacy Policy</FooterLink>
         </div>

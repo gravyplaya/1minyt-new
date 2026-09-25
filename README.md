@@ -91,6 +91,10 @@ Optional: `SUMMARY_MODEL`, `CHAT_MODEL`, `DECISION_MODEL`, `OPENAI_API_KEY` /
 
 The schema auto-creates on the first DB connection — no manual migration.
 
+The Docker image also builds the **browser extension bundle** from source and
+serves it at [`/extension/download`](#browser-extension) — no tooling needed
+on the machine you install it from.
+
 ### 3. Cron — subscription sync
 
 Dokploy → project → **Cron Jobs** → add a job (e.g. every 6 hours):
@@ -111,6 +115,31 @@ needed. Note: sign-in won't complete on the temporary Dokploy preview domain
 verified there.
 
 After cutover, decommission the Netlify site and delete `netlify.toml`.
+
+## Browser extension (self-host)
+
+The extension puts a 1minyt pill on every YouTube watch page — one click
+summarizes, right-click any video link to save/queue it, and the toolbar
+popup searches your library. It works with any 1minyt server, including one
+you host yourself. Full install + connect steps live on the app at
+`/extension`.
+
+**Install (from your own deployment):**
+
+1. Download the zip at `/extension/download` — your deployment serves the
+   bundle the Docker image built from source.
+2. Unzip it somewhere permanent.
+3. `chrome://extensions` (or `brave://extensions`) → Developer mode →
+   **Load unpacked** → pick the unzipped folder.
+
+**Connect:**
+
+1. Set `EXTENSION_API_KEY` (any long random string) in the app's env.
+2. Sign in to the app in the same browser.
+3. Extension icon → ⚙ options → server URL + API key → **Save & test**.
+
+**Build the bundle yourself** (from a repo checkout):
+`pnpm -C extension zip` → `extension/dist/*-chrome.zip`.
 
 ## Run it locally
 

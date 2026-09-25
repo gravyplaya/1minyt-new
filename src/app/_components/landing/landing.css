@@ -980,3 +980,114 @@
     animation: none !important;
   }
 }
+
+/* ============================================================
+   TAV-68 (self-host): /extension explainer page
+   Reuses the landing page's visual language (glass panels, chips,
+   ghost step numerals) without the 3D canvas.
+   ============================================================ */
+
+.ext-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 24px 0 8px;
+}
+
+.ext-card {
+  position: relative;
+  padding: 24px;
+}
+
+.ext-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e7e7ea;
+  margin-bottom: 10px;
+}
+
+/* Ghost numeral matching the tour stops' oversized numbers */
+.ext-step-num {
+  position: absolute;
+  top: -34px;
+  right: 8px;
+  font-size: 64px;
+  font-weight: 800;
+  line-height: 1;
+  color: transparent;
+  background: linear-gradient(135deg, #5b9eff, #7c5cff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  opacity: 0.18;
+  pointer-events: none;
+}
+
+.ext-p {
+  font-size: 13.5px;
+  color: #b8b8c2;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.ext-p + .ext-p {
+  margin-top: 10px;
+}
+
+.ext-link {
+  color: #5b9eff;
+  text-decoration: none;
+}
+.ext-link:hover {
+  text-decoration: underline;
+}
+
+.ext-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #d4d4dc;
+  background: rgba(21, 21, 26, 0.9);
+  border: 1px solid #2a2a33;
+  border-radius: 5px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.ext-pre {
+  margin: 12px 0;
+  padding: 14px 16px;
+  background: rgba(14, 14, 18, 0.85);
+  border: 1px solid #26262e;
+  border-radius: 10px;
+  overflow-x: auto;
+}
+.ext-pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  color: #d4d4dc;
+  line-height: 1.7;
+  white-space: pre;
+}
+
+.ext-note {
+  font-size: 12px;
+  color: #6f6f78;
+  max-width: 980px;
+  margin: 8px auto 40px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .ext-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .ext-card {
+    padding: 20px;
+  }
+  .ext-note {
+    text-align: left;
+    padding: 0 16px;
+  }
+}
+

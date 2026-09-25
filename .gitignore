@@ -8,3 +8,6 @@ data
 
 # ShipStudio metadata
 .shipstudio/
+
+# Built extension bundle — Docker bakes it in; dev falls back to extension/dist
+public/extension/
