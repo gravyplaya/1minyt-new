@@ -19,7 +19,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-  const denied = guardExtensionRequest(req);
+  const denied = await guardExtensionRequest(req);
   if (denied) return denied;
 
   const { denied: noSession } = await requireExtensionUser(req);

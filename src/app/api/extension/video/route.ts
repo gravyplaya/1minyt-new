@@ -26,7 +26,7 @@ export const dynamic = 'force-dynamic';
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
 export async function GET(req: Request) {
-  const denied = guardExtensionRequest(req);
+  const denied = await guardExtensionRequest(req);
   if (denied) return denied;
 
   const { user, denied: noSession } = await requireExtensionUser(req);

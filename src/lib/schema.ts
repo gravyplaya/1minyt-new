@@ -779,6 +779,24 @@ END $$;`,
   // transcript_segments: the composite PK (user_id, video_id, seg_index)
   // fully covers the old idx_tsegs_video — just drop it.
   `DROP INDEX IF EXISTS idx_tsegs_video`,
+
+  // ----- TAV-68h: per-user extension API keys ----------------------------------
+  //
+  // One key per user (user_id is the PK). /extension shows it when signed in —
+  // auto-created on the first visit, copy + regenerate from the page — and
+  // guardExtensionRequest accepts it alongside the operator's
+  // EXTENSION_API_KEY env master key. The key authenticates the *extension*
+  // only: data routes still require the session cookie (requireExtensionUser),
+  // so a leaked key alone can read nothing. Stored plaintext by the same
+  // convention as integration_settings tokens — the owner must be able to
+  // re-view and copy the value at any time (hashing would break "list the key
+  // on the page").
+  `CREATE TABLE IF NOT EXISTS extension_keys (
+    user_id    TEXT PRIMARY KEY,
+    api_key    TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

@@ -83,7 +83,7 @@ Set under project → Environment (all runtime-only):
 | `YOUTUBE_CLIENT_SECRET` | Google OAuth client secret |
 | `YOUTUBE_REDIRECT_URI` | `https://<your-domain>/api/oauth/callback` |
 | `OPENROUTER_API_KEY` | OpenRouter API key (summaries + chat) |
-| `EXTENSION_API_KEY` | shared secret for the browser extension API (unset = extension routes 503) |
+| `EXTENSION_API_KEY` | operator master key for the browser extension API (optional — every signed-in user gets a personal key on `/extension`) |
 | `CRON_SECRET` | required `x-cron-secret` header for POST /api/sync |
 
 Optional: `SUMMARY_MODEL`, `CHAT_MODEL`, `DECISION_MODEL`, `OPENAI_API_KEY` /
@@ -134,9 +134,13 @@ you host yourself. Full install + connect steps live on the app at
 
 **Connect:**
 
-1. Set `EXTENSION_API_KEY` (any long random string) in the app's env.
-2. Sign in to the app in the same browser.
-3. Extension icon → ⚙ options → server URL + API key → **Save & test**.
+1. Sign in to the app in the same browser, open `/extension` — your personal
+   key is right there (copy, and regenerate any time). No env vars needed.
+2. Extension icon → ⚙ options → server URL + the key → **Save & test**.
+
+Operators hosting the deployment for others can keep using the
+`EXTENSION_API_KEY` env master key themselves — but invited users never
+need it.
 
 **Build the bundle yourself** (from a repo checkout):
 `pnpm -C extension zip` → `extension/dist/*-chrome.zip`.

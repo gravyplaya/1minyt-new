@@ -35,6 +35,10 @@ code {
   font-size: 12px;
 }
 
+a {
+  color: #5b9eff;
+}
+
 form {
   display: flex;
   flex-direction: column;
