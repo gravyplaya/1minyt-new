@@ -47,6 +47,7 @@ import { friendlyError } from '@/lib/errors';
 import type { Chapter, ChatCitation, ChatMessage, ChannelCatalogHit, CommunityPulse, IncomingReference, MostReferencedVideo, PlaylistRow, PlaylistSummary, PlaylistVideoRow, SummaryRow, TranscriptSegment, TranscriptSource, TranscriptStatus, VideoWithSummary, TranscriptSearchResult, VideoReferenceWithTarget } from '@/lib/types';
 import { parseYouTubeUrl } from '@/lib/youtube-url';
 import { ingestVideoById } from '@/lib/video-ingest';
+import { regenerateExtensionKey } from '@/lib/extension-keys';
 
 export async function triggerSyncAction() {
   const userId = await requireUserId();
@@ -79,6 +80,33 @@ export async function disconnectAction() {
   await clearTokens(userId);
   revalidatePath('/');
   redirect('/');
+}
+
+// ----- TAV-68h: personal extension API key -----------------------------------
+
+export interface ExtensionKeyOutcome {
+  ok: boolean;
+  apiKey?: string;
+  error?: string;
+}
+
+/**
+ * TAV-68h: rotate the signed-in user's personal extension key. The old value
+ * stops working on the very next request (the gate reads the table). The
+ * extension's saved settings keep the stale value, so the user must re-paste
+ * after regenerating — the /extension page says so.
+ */
+export async function regenerateExtensionKeyAction(): Promise<ExtensionKeyOutcome> {
+  try {
+    const userId = await requireUserId();
+    const apiKey = await regenerateExtensionKey(userId);
+    revalidatePath('/extension');
+    return { ok: true, apiKey };
+  } catch (err) {
+    // Signed-out callers get redirect() thrown from requireUserId, which is
+    // the action's result — Next handles it. Everything else is a real error.
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export async function toggleHiddenAction(channelId: string, hidden: boolean) {

@@ -10,12 +10,20 @@
  *     connect-to-server steps. For developers building from source there's
  *     a "from source" section.
  *
- * Static marketing page (RSC, no client JS); it reuses the landing page's
- * BrowserWindowMock so the visual matches the tour.
+ * TAV-68h: when signed in, the connect section shows the visitor's personal
+ * extension key — auto-created on first view — with copy + regenerate. A
+ * non-developer never touches EXTENSION_API_KEY; the operator's env master
+ * key remains valid too (see lib/extension-api.ts guardExtensionRequest).
+ *
+ * RSC page; the key panel is a client island (copy/regenerate need JS), the
+ * rest reuses the landing page's BrowserWindowMock so the visual matches.
  */
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { BrowserWindowMock } from '../_components/landing/StopPanels';
+import { ExtensionKeyPanel } from '../_components/ExtensionKeyPanel';
+import { getSessionUser } from '@/lib/auth';
+import { ensureExtensionKey } from '@/lib/extension-keys';
 import '../_components/landing/landing.css';
 
 export const metadata: Metadata = {
@@ -24,7 +32,14 @@ export const metadata: Metadata = {
     'Summarize, save, and search YouTube from your browser with the 1minyt extension for Chrome and Brave. Works with any 1minyt server, including your own.',
 };
 
-export default function ExtensionPage() {
+export const dynamic = 'force-dynamic';
+
+export default async function ExtensionPage() {
+  // TAV-68h: resolve the session; ensure the key exists only for signed-in
+  // visitors so anonymous marketing traffic never writes rows.
+  const user = await getSessionUser();
+  const apiKey = user ? await ensureExtensionKey(user.id) : null;
+
   return (
     <main className="landing-main">
       {/* Gradient vignette for legibility (same recipe as the landing page,
@@ -118,34 +133,68 @@ export default function ExtensionPage() {
         <h2 className="landing-section-kicker landing-reveal landing-in">
           Connect it to your 1minyt server
         </h2>
-        <div className="ext-grid">
-          <StepCard n={1} title="Get your API key">
-            <p className="ext-p">
-              On the server you connect to, set the{' '}
-              <code className="ext-code">EXTENSION_API_KEY</code>{' '}
-              environment variable (any long random string). This is the
-              shared secret the extension presents on every request.
-            </p>
-          </StepCard>
-          <StepCard n={2} title="Sign in to the app">
-            <p className="ext-p">
-              Open the app in this browser and{' '}
-              <Link className="ext-link" href="/">
-                sign in
-              </Link>
-              . The extension rides your existing 1minyt session cookie — no
-              separate account.
-            </p>
-          </StepCard>
-          <StepCard n={3} title="Save &amp; test">
-            <p className="ext-p">
-              Click the 1minyt toolbar icon → gear → options. Enter the server
-              URL and the API key, hit{' '}
-              <strong>Save &amp; test connection</strong>, and the pill shows
-              up on your next YouTube watch page.
-            </p>
-          </StepCard>
-        </div>
+        {apiKey ? (
+          <div className="landing-stop landing-reveal landing-in" style={{ marginBottom: 0 }}>
+            <div className="stop-panel">
+              <ExtensionKeyPanel apiKey={apiKey} />
+            </div>
+          </div>
+        ) : (
+          <div className="ext-grid">
+            <StepCard n={1} title="Get your API key">
+              <p className="ext-p">
+                On the server you connect to, set the{' '}
+                <code className="ext-code">EXTENSION_API_KEY</code>{' '}
+                environment variable (any long random string). This is the
+                shared secret the extension presents on every request.
+              </p>
+            </StepCard>
+            <StepCard n={2} title="Sign in to the app">
+              <p className="ext-p">
+                Open the app in this browser and{' '}
+                <Link className="ext-link" href="/">
+                  sign in
+                </Link>
+                . The extension rides your existing 1minyt session cookie — no
+                separate account.
+              </p>
+            </StepCard>
+            <StepCard n={3} title="Save &amp; test">
+              <p className="ext-p">
+                Click the 1minyt toolbar icon → gear → options. Enter the server
+                URL and the API key, hit{' '}
+                <strong>Save &amp; test connection</strong>, and the pill shows
+                up on your next YouTube watch page.
+              </p>
+            </StepCard>
+          </div>
+        )}
+        {apiKey && (
+          <div className="ext-grid" style={{ marginTop: 24 }}>
+            <StepCard n={1} title="You&apos;re signed in — paste your key">
+              <p className="ext-p">
+                Your personal key is above. After installing the extension, open
+                its options (toolbar icon → gear), enter the server URL{' '}
+                (<code className="ext-code">{serverUrlHint()}</code>) and paste
+                the key, then hit <strong>Save &amp; test connection</strong>.
+              </p>
+            </StepCard>
+            <StepCard n={2} title="One key per account">
+              <p className="ext-p">
+                The key works only with your signed-in browser session — it
+                authenticates the extension, your cookie scopes the data.
+                Regenerate any time; the old value dies instantly.
+              </p>
+            </StepCard>
+            <StepCard n={3} title="Regenerate">
+              <p className="ext-p">
+                Suspect the key leaked (screenshot, shared machine)? Hit
+                Regenerate above and re-paste the new value in the extension
+                options — the old one stops working on the spot.
+              </p>
+            </StepCard>
+          </div>
+        )}
         <p className="ext-note">
           Settings live in <code className="ext-code">browser.storage.sync</code>{' '}
           and follow your Chrome profile across machines.
@@ -187,6 +236,12 @@ export default function ExtensionPage() {
               the image build, so nothing extra to run.
             </p>
             <p className="ext-p">
+              Every signed-in user gets a personal key on this page — your
+              invitees never need the operator&apos;s{' '}
+              <code className="ext-code">EXTENSION_API_KEY</code> (it stays
+              valid for you, the operator).
+            </p>
+            <p className="ext-p">
               Building the bundle yourself (from a checkout of the repo):
             </p>
             <pre className="ext-pre">
@@ -197,8 +252,7 @@ pnpm -C extension zip
             <p className="ext-p">
               Then load the unzipped{' '}
               <code className="ext-code">dist/chrome-mv3</code> folder as above,
-              and point the options page at your server URL and{' '}
-              <code className="ext-code">EXTENSION_API_KEY</code>.
+              and point the options page at your server URL and key.
             </p>
           </div>
         </div>
@@ -226,6 +280,12 @@ pnpm -C extension zip
       </section>
     </main>
   );
+}
+
+/** Display hint for the server URL — env override, else a generic phrase. */
+function serverUrlHint(): string {
+  const fromEnv = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, '');
+  return fromEnv ?? 'this site (e.g. https://1minyt.com)';
 }
 
 function StepCard({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {

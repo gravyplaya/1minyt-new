@@ -11,6 +11,8 @@
  *             signed-in checks — sign in to the app in a browser and copy the
  *             cookie (TAV-68: data routes scope by the session user). Without
  *             it only the key-gate + signed-out-401 checks run.
+ *           SMOKE_PERSONAL_KEY=<a user's personal key from /extension> to
+ *             verify the TAV-68h per-user key path passes the gate.
  * Optional: SMOKE_VIDEO_ID=dQw4w9WgXcQ to exercise ingest/summarize/queue
  */
 import process from 'node:process';
@@ -66,6 +68,19 @@ async function main() {
   check('wrong key → 401', badAuth.status === 401, badAuth);
   const health = await call('/api/extension/health', { headers: auth });
   check('health ok', health.status === 200 && health.body?.ok === true, health);
+
+  // TAV-68h: personal keys — a non-developer's key from /extension must pass
+  // the same gate. SMOKE_PERSONAL_KEY = any user's key value scraped from
+  // their signed-in /extension page.
+  if (process.env.SMOKE_PERSONAL_KEY) {
+    console.log('Personal key (TAV-68h):');
+    const personalAuth: Record<string, string> = {
+      Authorization: `Bearer ${process.env.SMOKE_PERSONAL_KEY}`,
+    };
+    if (SESSION_COOKIE) personalAuth.Cookie = `1minyt_session=${SESSION_COOKIE}`;
+    const personal = await call('/api/extension/health', { headers: personalAuth });
+    check('personal key → health ok', personal.status === 200 && personal.body?.ok === true, personal);
+  }
 
   if (!SESSION_COOKIE) {
     console.log('Signed-out session guard (no SMOKE_SESSION_COOKIE):');

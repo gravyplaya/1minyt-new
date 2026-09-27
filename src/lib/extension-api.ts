@@ -6,11 +6,12 @@
  * need the Next.js client runtime). These helpers give every extension route a
  * uniform contract instead of each one re-rolling it:
  *
- *  - Auth: two layers. `EXTENSION_API_KEY` on the server, sent by the extension
- *    as `Authorization: Bearer <key>`, gates the whole surface (no key
- *    configured = 503, wrong key = 401). User identity then comes from the
- *    app's own session cookie (TAV-68): the extension runs in the same browser
- *    as the app and sends its credentials, so `requireExtensionUser` resolves
+ *  - Auth: two layers. The extension presents a bearer key: either the
+ *    operator's `EXTENSION_API_KEY` env master secret (TAV-68a) or a
+ *    per-user key auto-listed on /extension (TAV-68h) — either one gates
+ *    the whole surface. User identity then comes from the app's own
+ *    session cookie (TAV-68): the extension runs in the same browser as
+ *    the app and sends its credentials, so `requireExtensionUser` resolves
  *    the signed-in user every data route scopes its queries by. Signed-out
  *    callers get a friendly 401 JSON — never a redirect.
  *  - CORS: MV3 service workers with the app origin in host_permissions bypass
@@ -25,6 +26,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getSessionUser, type SessionUser } from './auth';
+import { lookupExtensionUserId } from './extension-keys';
 import { parseYouTubeUrl } from './youtube-url';
 import type { FollowUp, SummaryRow } from './types';
 
@@ -54,21 +56,52 @@ function extensionCorsHeaders(req: Request): Record<string, string> {
 /**
  * Auth gate for every /api/extension/* handler. Returns a ready-to-send error
  * response, or null when the request may proceed.
+ *
+ * TAV-68h: two key flavors are accepted, same bearer header:
+ *  1. `EXTENSION_API_KEY` env (TAV-68a) — the operator's master key. Kept for
+ *     back-compat; unset is fine when per-user keys exist.
+ *  2. A per-user key from `extension_keys` — the default flavor every
+ *     non-developer gets: it's listed on /extension when signed in.
+ * With neither configured the surface answers 503 (as before), so an
+ * env-only deployment still surfaces "disabled" instead of 401-ing forever.
  */
-export function guardExtensionRequest(req: Request): NextResponse | null {
-  const expected = process.env.EXTENSION_API_KEY;
-  if (!expected) {
+export async function guardExtensionRequest(req: Request): Promise<NextResponse | null> {
+  const master = process.env.EXTENSION_API_KEY;
+  const match = /^Bearer (.+)$/.exec(req.headers.get('authorization') ?? '');
+  const provided = match?.[1] ?? '';
+
+  // Master key first — a constant-time compare against one env value, no DB.
+  if (master && provided && keysMatch(provided, master)) {
+    return null;
+  }
+
+  // Per-user key (TAV-68h): the indexed lookup by exact value IS the check.
+  if (provided) {
+    try {
+      const owner = await lookupExtensionUserId(provided);
+      if (owner) return null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return extensionJson(req, { ok: false, error: msg }, 500);
+    }
+    // A presented-but-unknown key is a credential rejection, even when no
+    // master key is configured — reserving 503 for "nothing presented and
+    // nothing configured" keeps a typo'd paste debuggable as 401.
+    return extensionJson(req, { ok: false, error: 'Invalid or missing API key.' }, 401);
+  }
+
+  if (!master) {
     return extensionJson(
       req,
-      { ok: false, error: 'Extension API is disabled — set EXTENSION_API_KEY on the server.' },
+      {
+        ok: false,
+        error:
+          'Extension API is disabled — set EXTENSION_API_KEY on the server or sign in and use your personal key from /extension.',
+      },
       503,
     );
   }
-  const match = /^Bearer (.+)$/.exec(req.headers.get('authorization') ?? '');
-  if (!match || !keysMatch(match[1], expected)) {
-    return extensionJson(req, { ok: false, error: 'Invalid or missing API key.' }, 401);
-  }
-  return null;
+  return extensionJson(req, { ok: false, error: 'Invalid or missing API key.' }, 401);
 }
 
 /**

@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
 export async function POST(req: Request) {
-  const denied = guardExtensionRequest(req);
+  const denied = await guardExtensionRequest(req);
   if (denied) return denied;
 
   const { denied: noSession } = await requireExtensionUser(req);

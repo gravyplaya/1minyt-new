@@ -1,8 +1,10 @@
 /**
  * TAV-68b: options — connect the extension to the app.
  *
- * Two fields: the app's base URL (default http://localhost:3000) and the
- * shared-secret API key (EXTENSION_API_KEY on the server). Saving:
+ * Two fields: the app's base URL (default http://localhost:3000) and the API
+ * key. The key is either the personal one from your /extension page (sign in
+ * → copy — the default for non-developers, TAV-68h) or, on a deployment you
+ * operate, the EXTENSION_API_KEY env value. Saving:
  *  1. stores both in browser.storage.sync (they follow the user across
  *     machines),
  *  2. requests the optional host permission for the origin — with it, the
@@ -64,8 +66,13 @@ export default function App() {
     <div className="page">
       <h1>⚡ 1minyt</h1>
       <p className="lede">
-        Connect the extension to your 1minyt server. Both values come from the server: the URL where the app runs, and
-        the <code>EXTENSION_API_KEY</code> env var set on it.
+        Connect the extension to your 1minyt server: the URL where the app runs, and your API key from the
+        app&apos;s{' '}
+        <a href={`${normalizeServerUrl(serverUrl)}/extension`} target="_blank" rel="noreferrer">
+          /extension
+        </a>{' '}
+        page (sign in there → &quot;Your extension key&quot;). Operators can also use the{' '}
+        <code>EXTENSION_API_KEY</code> env value.
       </p>
 
       <form onSubmit={save}>
@@ -86,7 +93,7 @@ export default function App() {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="EXTENSION_API_KEY from the server"
+            placeholder="Your personal key from /extension"
             spellCheck={false}
           />
         </label>
