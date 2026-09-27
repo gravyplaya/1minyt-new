@@ -7,6 +7,9 @@
  * copy-to-clipboard, and regenerate. The key is the *extension* credential —
  * data routes still require the session cookie — so the panel's copy says
  * "paste into the extension options" rather than treating it as a password.
+ * The field itself is masked like one, though (TAV-68h follow-up): rendered
+ * as a read-only password input, revealed on demand with Show/Hide, so the
+ * value doesn't sit in plain text on the screen or in screenshots.
  *
  * Copy uses the async Clipboard API with a textarea fallback for
  * non-secure contexts (http://localhost dev). Regenerate calls the server
@@ -26,6 +29,10 @@ export function ExtensionKeyPanel({ apiKey: initialKey }: Props) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  // Masked by default so the key reads like a password field — visible only
+  // on demand. Copy/regenerate operate on the state value, not the field's
+  // rendering, so masking never gets in the way.
+  const [revealed, setRevealed] = useState(false);
 
   async function copy() {
     setError(null);
@@ -97,7 +104,14 @@ export function ExtensionKeyPanel({ apiKey: initialKey }: Props) {
           flexWrap: 'wrap',
         }}
       >
-        <code
+        <input
+          type={revealed ? 'text' : 'password'}
+          value={apiKey}
+          readOnly
+          autoComplete="off"
+          spellCheck={false}
+          onFocus={(e) => e.currentTarget.select()}
+          aria-label="Your extension key"
           style={{
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
             fontSize: 13,
@@ -106,13 +120,23 @@ export function ExtensionKeyPanel({ apiKey: initialKey }: Props) {
             border: '1px solid #2a2a33',
             borderRadius: 8,
             padding: '10px 14px',
-            wordBreak: 'break-all',
             flex: 1,
             minWidth: 240,
+            // Match the landing page's input reset (no default appearance).
+            appearance: 'none',
+            outline: 'none',
           }}
+        />
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setRevealed((v) => !v)}
+          disabled={pending}
+          style={{ fontSize: 12 }}
+          aria-pressed={revealed}
         >
-          {apiKey}
-        </code>
+          {revealed ? 'Hide' : 'Show'}
+        </button>
         <button
           type="button"
           className="btn"
