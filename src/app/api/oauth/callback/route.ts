@@ -14,6 +14,34 @@ import { createSession, findOrCreateUserByGoogleChannel, SESSION_COOKIE, SESSION
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * TAV-68i: absolute origin the *client* used to reach this server, derived from
+ * proxy headers (correct behind Dokploy/Traefik) — unlike `req.nextUrl`, whose
+ * host comes from the socket the container bound (localhost:3000 in prod), not
+ * from the Host header. Every browser redirect we issue must use this, or the
+ * user lands on localhost.
+ *
+ * Resolution order:
+ *  1. `APP_ORIGIN` env — explicit operator override, wins outright.
+ *  2. `X-Forwarded-Host` (+ `X-Forwarded-Proto`) — set by Traefik/Cloudflare.
+ *  3. `Host` header (+ `X-Forwarded-Proto`, default https in production).
+ *  4. `req.nextUrl.origin` — dev / direct access.
+ */
+function requestOrigin(req: NextRequest): string {
+  const override = process.env.APP_ORIGIN?.trim().replace(/\/+$/, '');
+  if (override) return override;
+
+  const fwdHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
+  const host = fwdHost || req.headers.get('host');
+  if (host) {
+    const proto =
+      req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
+      || (process.env.NODE_ENV === 'production' ? 'https' : 'http');
+    return `${proto}://${host}`;
+  }
+  return req.nextUrl.origin;
+}
+
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code');
   const state = req.nextUrl.searchParams.get('state');
@@ -60,7 +88,10 @@ export async function GET(req: NextRequest) {
     });
     const session = await createSession(user.id);
 
-    const res = NextResponse.redirect(new URL('/', req.nextUrl));
+    // TAV-68i: redirect to the origin the browser actually used — derived from
+    // proxy headers, NOT req.nextUrl (whose host is the container-socket host,
+    // sending prod users to http://localhost:3000 after login).
+    const res = NextResponse.redirect(new URL('/', requestOrigin(req)));
     res.cookies.set(SESSION_COOKIE, session.id, {
       httpOnly: true,
       sameSite: 'lax',
