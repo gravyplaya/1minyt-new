@@ -327,6 +327,11 @@ export interface InboxVideo {
   has_summary: boolean;
   /** Computed relevance score (0–1 normalised). Higher = more relevant. */
   relevance_score: number;
+  /**
+   * TAV-72: JEV interest judgment (0–1, or null when the decision layer was
+   * unavailable/skipped). Blended into the feed order by rankInboxByInterest.
+   */
+  jev_interest?: number | null;
   /** Current triage state: null = not yet triaged. */
   triage_state: VideoTriageState | null;
 }

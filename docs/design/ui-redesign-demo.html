@@ -1,0 +1,2098 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>1minyt — UI redesign demo</title>
+<style>
+  /* ============================================================
+     1minyt UI redesign demo — extends the landing page's language
+     (glass panels, blue→purple gradients, chips, ghost numerals)
+     into the app. No WebGL; ambient CSS gradients only.
+
+     Type scale is deliberately large: base 16px, body 15–17px,
+     page titles 28–34px. Old app was ~12–13px.
+     ============================================================ */
+
+  :root {
+    --bg: #0a0a0c;
+    --bg-raise: #101016;
+    --glass: rgba(10, 10, 12, 0.55);
+    --glass-deep: rgba(14, 14, 18, 0.72);
+    --panel: rgba(20, 20, 26, 0.7);
+    --border: rgba(42, 42, 51, 0.55);
+    --border-soft: rgba(42, 42, 51, 0.35);
+    --text: #e7e7ea;
+    --text-dim: #b8b8c2;
+    --text-faint: #8b8b94;
+    --text-ghost: #5a5a64;
+    --blue: #5b9eff;
+    --blue-soft: #8fb8ff;
+    --purple: #7c5cff;
+    --purple-soft: #a88fff;
+    --grad: linear-gradient(135deg, #5b9eff, #7c5cff);
+    --radius-lg: 20px;
+    --radius-md: 14px;
+    --radius-sm: 10px;
+    --shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+    --sidebar-w: 248px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4 { text-wrap: balance; margin: 0; }
+  p { text-wrap: pretty; }
+
+  ::selection { background: rgba(91, 158, 255, 0.35); }
+
+  /* ----- Ambient background — the landing's 3D field, echoed in pure CSS ----- */
+
+  .ambient {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .ambient::before, .ambient::after {
+    content: "";
+    position: absolute;
+    width: 60vw;
+    height: 60vw;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.5;
+  }
+  .ambient::before {
+    top: -25vw; left: -15vw;
+    background: radial-gradient(closest-side, rgba(91, 158, 255, 0.16), transparent 70%);
+    animation: drift-a 26s ease-in-out infinite alternate;
+  }
+  .ambient::after {
+    bottom: -30vw; right: -20vw;
+    background: radial-gradient(closest-side, rgba(124, 92, 255, 0.13), transparent 70%);
+    animation: drift-b 32s ease-in-out infinite alternate;
+  }
+
+  @keyframes drift-a {
+    from { transform: translate(0, 0) scale(1); }
+    to   { transform: translate(6vw, 4vw) scale(1.15); }
+  }
+  @keyframes drift-b {
+    from { transform: translate(0, 0) scale(1.1); }
+    to   { transform: translate(-5vw, -6vw) scale(0.95); }
+  }
+
+  /* Faint grid texture, like a starfield chart */
+  .ambient .grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse at 30% 20%, black 0%, transparent 75%);
+  }
+
+  /* ----- Shell ----- */
+
+  .app {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: var(--sidebar-w) 1fr;
+    min-height: 100vh;
+  }
+
+  /* ----- Sidebar (replaces HeaderBar + TabBar + rails' chrome) ----- */
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    padding: 16px 0 16px 16px;
+    display: flex;
+  }
+
+  .sidebar-inner {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(14px);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 20px 18px;
+    text-decoration: none;
+    color: var(--text);
+  }
+  .brand-mark {
+    width: 30px; height: 30px;
+    border-radius: 9px;
+    background: var(--grad);
+    box-shadow: 0 4px 18px rgba(91, 158, 255, 0.4);
+    position: relative;
+    flex: none;
+  }
+  .brand-mark::after {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.92);
+  }
+  .brand-name { font-size: 19px; font-weight: 800; letter-spacing: -0.02em; }
+  .brand-beta {
+    font-size: 11px; font-weight: 600;
+    color: var(--blue);
+    background: rgba(91, 158, 255, 0.12);
+    border: 1px solid rgba(91, 158, 255, 0.25);
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-left: auto;
+  }
+
+  .nav { flex: 1; padding: 8px 12px; overflow-y: auto; }
+
+  .nav-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-ghost);
+    padding: 14px 10px 8px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    margin-bottom: 2px;
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 15.5px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+    position: relative;
+  }
+  .nav-item svg { width: 19px; height: 19px; flex: none; opacity: 0.75; }
+  .nav-item:hover { background: rgba(255, 255, 255, 0.045); color: var(--text); }
+  .nav-item.active {
+    background: linear-gradient(135deg, rgba(91, 158, 255, 0.16), rgba(124, 92, 255, 0.12));
+    border-color: rgba(91, 158, 255, 0.3);
+    color: #fff;
+  }
+  .nav-item.active::before {
+    content: "";
+    position: absolute;
+    left: -12px; top: 22%;
+    height: 56%;
+    width: 3px;
+    border-radius: 999px;
+    background: var(--grad);
+  }
+  .nav-item.active svg { opacity: 1; color: var(--blue-soft); }
+
+  .nav-badge {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--blue-soft);
+    background: rgba(91, 158, 255, 0.14);
+    border: 1px solid rgba(91, 158, 255, 0.28);
+    padding: 1px 8px;
+    border-radius: 999px;
+  }
+  .nav-badge.hot {
+    color: #fff;
+    background: var(--grad);
+    border-color: transparent;
+  }
+
+  .sidebar-foot {
+    padding: 12px;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  .user-chip-wrap { position: relative; }
+
+  .user-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+    transition: background 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+  }
+  .user-chip:hover { background: rgba(255, 255, 255, 0.045); }
+  .user-chip[aria-expanded="true"] {
+    background: rgba(255, 255, 255, 0.045);
+    border-color: rgba(91, 158, 255, 0.3);
+  }
+
+  .user-caret {
+    margin-left: auto;
+    width: 14px; height: 14px;
+    color: var(--text-faint);
+    transition: transform 0.2s var(--ease-out);
+    flex: none;
+  }
+  .user-chip[aria-expanded="true"] .user-caret { transform: rotate(180deg); color: var(--blue-soft); }
+  .user-avatar {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: var(--grad);
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    flex: none;
+  }
+  .user-name { font-size: 14.5px; font-weight: 600; }
+  .user-sub { font-size: 12px; color: var(--text-faint); }
+
+  /* User menu popover — opens above the chip, grows from it */
+  .user-popover {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    right: 0;
+    background: var(--glass-deep);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    backdrop-filter: blur(14px);
+    box-shadow: var(--shadow), 0 0 34px rgba(91, 158, 255, 0.08);
+    padding: 8px;
+    display: grid;
+    gap: 2px;
+    transform-origin: bottom left;
+    transform: scale(0.94) translateY(6px);
+    opacity: 0;
+    visibility: hidden;
+    transition: transform 0.18s var(--ease-out), opacity 0.18s ease, visibility 0.18s;
+    z-index: 20;
+  }
+  .user-popover.open {
+    transform: none;
+    opacity: 1;
+    visibility: visible;
+  }
+  .user-popover-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-ghost);
+    padding: 8px 12px 6px;
+  }
+  .user-popover-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    font: inherit;
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--text-dim);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .user-popover-item:hover { background: rgba(255, 255, 255, 0.045); color: var(--text); }
+  .user-popover-item.danger:hover { color: #ff8f8f; background: rgba(255, 99, 99, 0.08); }
+  .user-popover-item svg { width: 17px; height: 17px; opacity: 0.75; }
+  .user-popover-divider { height: 1px; background: var(--border-soft); margin: 6px 4px; }
+
+  /* ----- Top bar (paste box, sync) ----- */
+
+  .main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 16px 24px 48px;
+  }
+
+  .topbar {
+    position: sticky;
+    top: 16px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 14px;
+    margin-bottom: 28px;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    backdrop-filter: blur(14px);
+    box-shadow: var(--shadow);
+  }
+
+  .paste-box {
+    flex: 1;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    background: rgba(20, 20, 26, 0.7);
+    border: 1px solid #2a2a33;
+    border-radius: var(--radius-sm);
+    padding: 6px 6px 6px 14px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .paste-box:focus-within {
+    border-color: rgba(91, 158, 255, 0.55);
+    box-shadow: 0 0 0 3px rgba(91, 158, 255, 0.15), 0 0 30px rgba(91, 158, 255, 0.1);
+  }
+  .paste-box svg { width: 17px; height: 17px; color: var(--text-faint); flex: none; }
+  .paste-box input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    min-width: 0;
+  }
+  .paste-box input::placeholder { color: var(--text-ghost); }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font: inherit;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    border: 1px solid #2a2a33;
+    background: rgba(20, 20, 26, 0.7);
+    color: var(--text);
+    padding: 8px 16px;
+    font-size: 14.5px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn:hover { border-color: #3a3a46; }
+
+  .btn-primary {
+    background: var(--grad);
+    border-color: transparent;
+    color: #fff;
+    box-shadow: 0 6px 24px rgba(91, 158, 255, 0.35);
+  }
+  .btn-primary:hover {
+    box-shadow: 0 8px 32px rgba(91, 158, 255, 0.5);
+    background: linear-gradient(135deg, #6dabff, #8b6dff);
+  }
+
+  .btn-sm { padding: 6px 12px; font-size: 13.5px; }
+  .btn-ghost { background: none; border-color: transparent; color: var(--text-faint); }
+  .btn-ghost:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+
+  .sync-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #4ade80;
+    box-shadow: 0 0 10px rgba(74, 222, 128, 0.7);
+  }
+
+  /* ----- Pages ----- */
+
+  .page { display: none; animation: page-in 0.45s var(--ease-out) both; }
+  .page.visible { display: block; }
+
+  @keyframes page-in {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  .page-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+
+  .page-kicker {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--blue);
+    margin-bottom: 6px;
+  }
+
+  .page-title {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+  }
+
+  .grad-text {
+    background: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .page-sub {
+    font-size: 16px;
+    color: var(--text-dim);
+    max-width: 60ch;
+    margin-top: 8px;
+  }
+
+  .count-pill {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--blue-soft);
+    background: rgba(91, 158, 255, 0.1);
+    border: 1px solid rgba(91, 158, 255, 0.25);
+    border-radius: 999px;
+    padding: 6px 16px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Shared glass card */
+  .card {
+    background: var(--glass-deep);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--shadow);
+  }
+
+  .card-pad { padding: 22px 24px; }
+
+  /* ----- Chips ----- */
+
+  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .chip {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-dim);
+    background: rgba(20, 20, 26, 0.75);
+    border: 1px solid #2a2a33;
+    border-radius: 999px;
+    padding: 5px 13px;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+  .chip.clickable { cursor: pointer; }
+  .chip.clickable:hover { border-color: rgba(91, 158, 255, 0.4); color: var(--text); }
+  .chip.active {
+    color: #fff;
+    background: linear-gradient(135deg, rgba(91, 158, 255, 0.25), rgba(124, 92, 255, 0.2));
+    border-color: rgba(91, 158, 255, 0.45);
+  }
+
+  .chip-blue { color: var(--blue-soft); background: rgba(91,158,255,0.12); border-color: rgba(91,158,255,0.28); }
+  .chip-purple { color: var(--purple-soft); background: rgba(124,92,255,0.12); border-color: rgba(124,92,255,0.28); }
+
+  /* ----- HOME (channels) ----- */
+
+  .filter-bar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+    padding: 14px 16px;
+  }
+  .filter-bar .divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+  .filter-label { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-ghost); margin-right: 2px; }
+
+  .channel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+  }
+
+  .channel-card {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 16px;
+    padding: 18px;
+    transition: transform 0.18s var(--ease-out), border-color 0.18s ease, box-shadow 0.18s ease;
+    cursor: pointer;
+  }
+  .channel-card:hover {
+    transform: translateY(-3px);
+    border-color: rgba(91, 158, 255, 0.35);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), 0 0 34px rgba(91, 158, 255, 0.08);
+  }
+
+  .channel-avatar {
+    width: 64px; height: 64px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    font-size: 22px;
+    background: linear-gradient(135deg, rgba(91,158,255,0.3), rgba(124,92,255,0.22)), #1a1a22;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+
+  .channel-name { font-size: 17.5px; font-weight: 700; letter-spacing: -0.01em; }
+  .channel-handle { font-size: 13.5px; color: var(--text-faint); font-weight: 400; margin-left: 8px; }
+
+  .channel-stats {
+    display: flex;
+    gap: 18px;
+    margin: 8px 0 10px;
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+  .channel-stats b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 700; }
+  .channel-stats .stat b { color: var(--blue-soft); }
+  .stat { display: flex; gap: 6px; align-items: baseline; }
+
+  .music-flag {
+    font-size: 12.5px;
+    color: #fff;
+    background: var(--grad);
+    border-radius: 6px;
+    padding: 2px 9px;
+    font-weight: 700;
+  }
+
+  /* ----- WATCH ----- */
+
+  .watch-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .player {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background:
+      radial-gradient(ellipse at 30% 30%, rgba(91, 158, 255, 0.22), transparent 55%),
+      radial-gradient(ellipse at 75% 70%, rgba(124, 92, 255, 0.18), transparent 55%),
+      #12121a;
+    box-shadow: var(--shadow);
+    display: grid;
+    place-items: center;
+  }
+  .player-button {
+    width: 84px; height: 84px;
+    border-radius: 50%;
+    background: rgba(10, 10, 12, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(8px);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: transform 0.15s var(--ease-out), background 0.15s ease;
+  }
+  .player-button:hover { transform: scale(1.07); background: rgba(10, 10, 12, 0.7); }
+  .player-button svg { width: 30px; height: 30px; color: #fff; margin-left: 4px; }
+
+  .player-meta {
+    position: absolute;
+    left: 18px; bottom: 16px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.75);
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+  .player-pill {
+    position: absolute;
+    top: 16px; left: 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--grad);
+    border-radius: 999px;
+    padding: 6px 14px;
+    box-shadow: 0 4px 20px rgba(91, 158, 255, 0.4);
+  }
+  .player-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.9); }
+
+  .watch-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 18px 0 6px; }
+  .watch-channel { font-size: 15.5px; color: var(--text-dim); }
+
+  .summary-block h3 {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--blue);
+    margin-bottom: 12px;
+  }
+
+  .tldr {
+    font-size: 16.5px;
+    line-height: 1.65;
+    color: var(--text);
+    padding-left: 14px;
+    border-left: 3px solid rgba(91, 158, 255, 0.5);
+    margin-bottom: 16px;
+  }
+
+  .key-points { list-style: none; padding: 0; margin: 0; }
+  .key-points li {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 8px 0;
+    font-size: 15.5px;
+    color: var(--text-dim);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  }
+  .key-points li:last-child { border-bottom: none; }
+
+  .ts {
+    font-size: 12.5px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--blue-soft);
+    background: rgba(91, 158, 255, 0.1);
+    border: 1px solid rgba(91, 158, 255, 0.22);
+    border-radius: 6px;
+    padding: 2px 8px;
+    flex: none;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .ts:hover { background: rgba(91, 158, 255, 0.2); }
+
+  /* Queue rail */
+  .queue-rail { display: grid; gap: 12px; }
+  .queue-card-title {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--blue);
+    padding: 0 2px;
+  }
+
+  .queue-item {
+    display: flex;
+    gap: 12px;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s var(--ease-out);
+  }
+  .queue-item:hover { border-color: rgba(91, 158, 255, 0.4); transform: translateX(3px); }
+  .queue-item.now { border-color: rgba(91, 158, 255, 0.45); box-shadow: 0 0 26px rgba(91, 158, 255, 0.1); }
+
+  .thumb {
+    width: 88px;
+    aspect-ratio: 16 / 9;
+    border-radius: 8px;
+    flex: none;
+    background:
+      linear-gradient(135deg, rgba(91, 158, 255, 0.3), rgba(124, 92, 255, 0.2)),
+      #1a1a22;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  }
+  .queue-item .q-title { font-size: 14.5px; font-weight: 600; line-height: 1.35; margin-bottom: 4px; }
+  .queue-item .q-meta { font-size: 12.5px; color: var(--text-faint); }
+  .q-why {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--purple-soft);
+    background: rgba(124, 92, 255, 0.12);
+    border: 1px solid rgba(124, 92, 255, 0.25);
+    border-radius: 6px;
+    padding: 2px 8px;
+    display: inline-block;
+    margin-top: 6px;
+  }
+
+  /* ----- LIBRARY ----- */
+
+  .library-layout { display: grid; grid-template-columns: 220px 1fr; gap: 20px; align-items: start; }
+
+  .rail-nav { display: grid; gap: 4px; padding: 10px; position: sticky; top: 96px; }
+  .rail-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .rail-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+  .rail-item.active {
+    background: linear-gradient(135deg, rgba(91, 158, 255, 0.18), rgba(124, 92, 255, 0.13));
+    color: #fff;
+    border: 1px solid rgba(91, 158, 255, 0.3);
+  }
+  .rail-count { font-size: 13px; font-weight: 700; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+  .rail-item.active .rail-count { color: var(--blue-soft); }
+
+  .video-row {
+    display: grid;
+    grid-template-columns: 140px 1fr auto;
+    gap: 16px;
+    padding: 16px;
+    border-radius: var(--radius-md);
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s var(--ease-out);
+  }
+  .video-row:hover { border-color: rgba(91, 158, 255, 0.35); transform: translateY(-2px); }
+  .video-row .thumb { width: 140px; }
+  .vr-title { font-size: 16.5px; font-weight: 600; line-height: 1.35; margin-bottom: 5px; }
+  .vr-meta { font-size: 13.5px; color: var(--text-faint); margin-bottom: 8px; }
+  .star {
+    font-size: 17px;
+    color: #2a2a33;
+    cursor: pointer;
+    transition: color 0.15s ease, transform 0.15s var(--ease-out);
+    background: none;
+    border: none;
+    padding: 4px;
+  }
+  .star.on { color: #f5c26b; }
+  .star:hover { transform: scale(1.2); }
+
+  /* ----- SEARCH ----- */
+
+  .search-hero { max-width: 760px; margin: 24px auto 36px; text-align: center; }
+  .search-box {
+    display: flex;
+    gap: 8px;
+    background: rgba(20, 20, 26, 0.75);
+    border: 1px solid #2a2a33;
+    border-radius: var(--radius-md);
+    padding: 8px 8px 8px 18px;
+    margin-top: 20px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .search-box:focus-within {
+    border-color: rgba(91, 158, 255, 0.55);
+    box-shadow: 0 0 0 3px rgba(91, 158, 255, 0.15), 0 0 40px rgba(91, 158, 255, 0.12);
+  }
+  .search-box input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 16.5px;
+  }
+  .search-box input::placeholder { color: var(--text-ghost); }
+
+  .search-results { max-width: 860px; margin: 0 auto; }
+
+  .rerank-note {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13.5px;
+    color: var(--text-faint);
+    margin: 0 0 18px;
+  }
+  .rerank-badge {
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--purple-soft);
+    background: rgba(124, 92, 255, 0.12);
+    border: 1px solid rgba(124, 92, 255, 0.3);
+    padding: 3px 10px;
+    border-radius: 6px;
+  }
+
+  .hit {
+    padding: 18px 20px;
+    border-radius: var(--radius-md);
+    margin-bottom: 12px;
+    transition: border-color 0.15s ease;
+  }
+  .hit:hover { border-color: rgba(91, 158, 255, 0.35); }
+  .hit-title { font-size: 16.5px; font-weight: 600; margin-bottom: 4px; }
+  .hit-channel { font-size: 13.5px; color: var(--text-faint); margin-bottom: 10px; }
+  .hit-quote {
+    font-size: 15px;
+    color: var(--text-dim);
+    line-height: 1.65;
+    padding-left: 14px;
+    border-left: 2px solid rgba(91, 158, 255, 0.4);
+  }
+  .hit-quote mark {
+    background: rgba(91, 158, 255, 0.22);
+    color: var(--blue-soft);
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
+  .hit-foot { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+
+  /* ----- CHAT ----- */
+
+  .chat-layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr) 300px;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .thread-list { display: grid; gap: 6px; padding: 10px; }
+  .thread-item {
+    padding: 11px 13px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .thread-item:hover { background: rgba(255, 255, 255, 0.04); }
+  .thread-item.active {
+    background: linear-gradient(135deg, rgba(91, 158, 255, 0.16), rgba(124, 92, 255, 0.12));
+    border: 1px solid rgba(91, 158, 255, 0.3);
+  }
+  .thread-title { font-size: 14.5px; font-weight: 600; margin-bottom: 3px; }
+  .thread-meta { font-size: 12.5px; color: var(--text-faint); }
+
+  .chat-panel { display: flex; flex-direction: column; min-height: 560px; }
+  .chat-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-soft);
+    flex-wrap: wrap;
+  }
+  .chat-title { font-size: 17px; font-weight: 700; }
+  .scope-select {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--blue-soft);
+    background: rgba(91, 158, 255, 0.1);
+    border: 1px solid rgba(91, 158, 255, 0.28);
+    border-radius: 999px;
+    padding: 5px 14px;
+    cursor: pointer;
+  }
+
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    margin-left: auto;
+    user-select: none;
+  }
+  .toggle-track {
+    width: 44px; height: 25px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+  .toggle-track::after {
+    content: "";
+    position: absolute;
+    top: 2.5px; left: 3px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: transform 0.2s var(--ease-out), background 0.2s ease;
+  }
+  .toggle.on .toggle-track {
+    background: linear-gradient(135deg, rgba(91,158,255,0.5), rgba(124,92,255,0.45));
+    border-color: rgba(91, 158, 255, 0.5);
+  }
+  .toggle.on .toggle-track::after { transform: translateX(18px); background: #fff; }
+
+  .chat-body { flex: 1; padding: 20px; display: grid; gap: 14px; align-content: start; }
+
+  .bubble {
+    max-width: 82%;
+    font-size: 15.5px;
+    line-height: 1.6;
+    padding: 13px 17px;
+    border-radius: 16px;
+    background: rgba(30, 30, 38, 0.85);
+    border: 1px solid #26262e;
+    justify-self: start;
+    border-bottom-left-radius: 5px;
+    color: var(--text-dim);
+  }
+  .bubble b { color: var(--text); }
+  .bubble-q {
+    justify-self: end;
+    background: linear-gradient(135deg, rgba(91, 158, 255, 0.2), rgba(124, 92, 255, 0.15));
+    border-color: rgba(91, 158, 255, 0.35);
+    border-bottom-left-radius: 16px;
+    border-bottom-right-radius: 5px;
+    color: var(--text);
+  }
+  .cite {
+    display: inline-block;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--blue-soft);
+    background: rgba(91, 158, 255, 0.12);
+    border: 1px solid rgba(91, 158, 255, 0.28);
+    border-radius: 5px;
+    padding: 2px 7px;
+    margin: 6px 5px 0 0;
+    cursor: pointer;
+  }
+  .cite:hover { background: rgba(91, 158, 255, 0.22); }
+
+  .chat-input {
+    display: flex;
+    gap: 10px;
+    padding: 14px 16px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .chat-input input {
+    flex: 1;
+    background: rgba(20, 20, 26, 0.75);
+    border: 1px solid #2a2a33;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    font-size: 15.5px;
+    padding: 11px 16px;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .chat-input input:focus {
+    border-color: rgba(91, 158, 255, 0.55);
+    box-shadow: 0 0 0 3px rgba(91, 158, 255, 0.13);
+  }
+
+  /* Channel memory card */
+  .memory-card { padding: 20px; }
+  .memory-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .memory-avatar {
+    width: 44px; height: 44px;
+    border-radius: 13px;
+    background: linear-gradient(135deg, rgba(91,158,255,0.35), rgba(124,92,255,0.25)), #1a1a22;
+    display: grid;
+    place-items: center;
+    font-size: 18px;
+  }
+  .memory-title { font-size: 16px; font-weight: 700; }
+  .memory-sub { font-size: 12.5px; color: var(--text-faint); }
+  .memory-text { font-size: 14px; color: var(--text-dim); line-height: 1.65; }
+  .memory-tags { margin-top: 14px; }
+
+  /* ----- SETTINGS ----- */
+
+  .settings-layout { display: grid; grid-template-columns: 260px 1fr; gap: 20px; align-items: start; }
+  .settings-section { margin-bottom: 20px; }
+  .settings-section h3 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 14px;
+  }
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 16px 20px;
+    border-radius: var(--radius-md);
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    margin-bottom: 10px;
+  }
+  .setting-name { font-size: 15.5px; font-weight: 600; margin-bottom: 3px; }
+  .setting-desc { font-size: 13.5px; color: var(--text-faint); }
+  .key-box {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    color: var(--text-dim);
+    background: rgba(14, 14, 18, 0.9);
+    border: 1px solid #26262e;
+    border-radius: 8px;
+    padding: 8px 14px;
+  }
+
+  /* ----- INBOX (Smart Inbox triage) ----- */
+
+  .inbox-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+
+  .inbox-list { display: grid; gap: 12px; max-width: 780px; }
+
+  .inbox-card {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .inbox-body { min-width: 0; }
+  .inbox-title { font-size: 16px; font-weight: 600; line-height: 1.35; margin-bottom: 4px; }
+  .inbox-meta { font-size: 13.5px; color: var(--text-faint); margin-bottom: 12px; }
+
+  .inbox-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .btn-accept {
+    background: linear-gradient(135deg, rgba(91, 158, 255, 0.2), rgba(124, 92, 255, 0.16));
+    border-color: rgba(91, 158, 255, 0.4);
+    color: var(--text);
+  }
+  .btn-accept:hover { border-color: rgba(91, 158, 255, 0.65); background: linear-gradient(135deg, rgba(91, 158, 255, 0.3), rgba(124, 92, 255, 0.24)); }
+
+  .inbox-reasons { margin-top: 12px; }
+
+  .inbox-empty-note {
+    margin-top: 24px;
+    text-align: center;
+    color: var(--text-faint);
+    font-size: 14px;
+  }
+
+  /* ----- MUSIC (audio-only queue) ----- */
+
+  .music-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .now-card { display: grid; gap: 16px; }
+
+  .album {
+    position: relative;
+    width: 100%;
+    max-width: 360px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    margin: 24px auto 8px;
+    background:
+      radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.12), transparent 45%),
+      conic-gradient(from 210deg, #1a1a22, #232334, #1a1a22);
+    box-shadow:
+      var(--shadow),
+      0 0 60px rgba(124, 92, 255, 0.12),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+    display: grid;
+    place-items: center;
+    animation: spin 22s linear infinite;
+    animation-play-state: paused;
+  }
+  .album.spinning { animation-play-state: running; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .album-center {
+    width: 30%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background:
+      linear-gradient(135deg, rgba(91, 158, 255, 0.4), rgba(124, 92, 255, 0.3)),
+      #0e0e12;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 0 24px rgba(91, 158, 255, 0.2);
+  }
+
+  .music-title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; text-align: center; }
+  .music-artist { font-size: 15.5px; color: var(--text-dim); text-align: center; margin-top: 4px; }
+
+  .music-transport {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 18px;
+    margin-top: 10px;
+  }
+  .transport-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    transition: color 0.15s ease, transform 0.15s var(--ease-out);
+    display: grid;
+    place-items: center;
+  }
+  .transport-btn:hover { color: var(--text); transform: scale(1.08); }
+  .transport-btn:active { transform: scale(0.94); }
+  .transport-btn svg { width: 26px; height: 26px; }
+  .transport-btn.main {
+    width: 62px; height: 62px;
+    color: #fff;
+    background: var(--grad);
+    box-shadow: 0 8px 28px rgba(91, 158, 255, 0.4);
+  }
+  .transport-btn.main svg { width: 26px; height: 26px; }
+
+  .music-progress { margin-top: 18px; }
+  .progress-bar {
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+  }
+  .progress-bar i {
+    display: block;
+    height: 100%;
+    width: 38%;
+    border-radius: 999px;
+    background: var(--grad);
+  }
+  .progress-times {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12.5px;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+    margin-top: 6px;
+  }
+
+  .music-list { display: grid; gap: 10px; }
+
+  .music-item {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s var(--ease-out);
+  }
+  .music-item:hover { border-color: rgba(124, 92, 255, 0.4); transform: translateX(3px); }
+  .music-item.now { border-color: rgba(91, 158, 255, 0.45); box-shadow: 0 0 26px rgba(91, 158, 255, 0.1); }
+
+  .note-disc {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    flex: none;
+    background:
+      radial-gradient(circle, #0e0e12 28%, transparent 29%),
+      conic-gradient(from 210deg, #232334, #2e2e40, #232334);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+  .music-item .q-title { font-size: 14.5px; font-weight: 600; }
+  .music-item .q-meta { font-size: 12.5px; color: var(--text-faint); }
+  .music-dur {
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+  }
+
+  /* ----- Footer note ----- */
+
+  .demo-note {
+    margin-top: 40px;
+    padding: 14px 18px;
+    border-radius: var(--radius-md);
+    border: 1px dashed rgba(91, 158, 255, 0.35);
+    background: rgba(91, 158, 255, 0.05);
+    color: var(--text-faint);
+    font-size: 13.5px;
+    text-align: center;
+  }
+
+  /* ----- Responsive ----- */
+
+  @media (max-width: 1100px) {
+    .chat-layout { grid-template-columns: 1fr; }
+    .thread-list, .memory-card-wrap { display: none; }
+  }
+  @media (max-width: 960px) {
+    .watch-layout, .library-layout, .settings-layout { grid-template-columns: 1fr; }
+    .app { grid-template-columns: 1fr; }
+    .sidebar { position: fixed; z-index: 50; }
+  }
+
+  /* ----- Reduced motion ----- */
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+    .ambient::before, .ambient::after { animation: none; }
+  }
+
+  /* Keyboard focus */
+  :focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+
+<div class="ambient"><div class="grid"></div></div>
+
+<div class="app">
+
+  <!-- ==================== SIDEBAR ==================== -->
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+      <a class="brand" href="#">
+        <span class="brand-mark"></span>
+        <span class="brand-name">1minyt</span>
+        <span class="brand-beta">beta</span>
+      </a>
+
+      <nav class="nav" aria-label="Main">
+        <div class="nav-label">Watch</div>
+        <a class="nav-item" data-page="home" href="#home">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5V21H3z"/><path d="M9 21v-7h6v7"/></svg>
+          Home
+          <span class="nav-badge">18</span>
+        </a>
+        <a class="nav-item" data-page="watch" href="#watch">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="m10 9 5 3-5 3z"/></svg>
+          Watch
+          <span class="nav-badge hot">7</span>
+        </a>
+        <a class="nav-item" data-page="music" href="#music">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V6l10-2v12"/><circle cx="7" cy="18" r="2.5"/><circle cx="17" cy="16" r="2.5"/></svg>
+          Music
+        </a>
+
+        <div class="nav-label">Organize</div>
+        <a class="nav-item" data-page="inbox" href="#inbox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5 4h14l3 8v8H2v-8z"/></svg>
+          Inbox
+          <span class="nav-badge">3</span>
+        </a>
+        <a class="nav-item" data-page="library" href="#library">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21C7 17 3 13.5 3 9.5 3 6.5 5.5 4 8.5 4c2 0 3 1 3.5 2 .5-1 1.5-2 3.5-2 3 0 5.5 2.5 5.5 5.5 0 4-4 7.5-9 11.5z"/></svg>
+          Library
+          <span class="nav-badge">12</span>
+        </a>
+
+        <div class="nav-label">Think</div>
+        <a class="nav-item" data-page="search" href="#search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          Search
+        </a>
+        <a class="nav-item" data-page="chat" href="#chat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Chat
+        </a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="user-chip-wrap">
+          <button class="user-chip" id="user-chip" aria-haspopup="true" aria-expanded="false" aria-controls="user-popover">
+            <span class="user-avatar">G</span>
+            <span>
+              <div class="user-name">Geo</div>
+              <div class="user-sub">Synced 2h ago</div>
+            </span>
+            <svg class="user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+
+          <div class="user-popover" id="user-popover" role="menu" aria-label="Account">
+            <div class="user-popover-label">Account</div>
+            <button class="user-popover-item" data-page="settings" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>
+              Settings
+            </button>
+            <div class="user-popover-divider"></div>
+            <button class="user-popover-item danger" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+              Sign out
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== MAIN ==================== -->
+  <div class="main">
+
+    <div class="topbar">
+      <label class="paste-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+        <input type="url" placeholder="Paste any YouTube URL — instant summary, no sign-in" />
+        <button class="btn btn-primary btn-sm">Summarize</button>
+      </label>
+      <button class="btn btn-sm"><span class="sync-dot"></span> Sync</button>
+    </div>
+
+    <!-- ============ HOME ============ -->
+    <section class="page visible" id="page-home" aria-label="Home">
+      <div class="page-head">
+        <div>
+          <div class="page-kicker">Your subscriptions</div>
+          <h1 class="page-title">Channels <span class="grad-text">18</span></h1>
+          <p class="page-sub">Everything you follow, summarized and connected. Click a channel to open its dossier.</p>
+        </div>
+        <span class="count-pill">412 videos indexed</span>
+      </div>
+
+      <div class="card filter-bar">
+        <span class="filter-label">Folders</span>
+        <div class="chip-row">
+          <span class="chip clickable active">All</span>
+          <span class="chip clickable">Science</span>
+          <span class="chip clickable">Dev</span>
+          <span class="chip clickable" style="background:#3dd68c; color:#0a0a0c; border-color:transparent; font-weight:700;">Music</span>
+          <span class="chip clickable">AI</span>
+        </div>
+        <span class="divider"></span>
+        <span class="filter-label">Tags</span>
+        <div class="chip-row">
+          <span class="chip clickable">#deep-dives</span>
+          <span class="chip clickable">#quick-news</span>
+          <span class="chip clickable">#interviews</span>
+        </div>
+      </div>
+
+      <div class="channel-grid">
+        <div class="card channel-card" tabindex="0">
+          <div class="channel-avatar">🔬</div>
+          <div>
+            <div><span class="channel-name">Veritasium</span><span class="channel-handle">@veritasium</span></div>
+            <div class="channel-stats">
+              <span class="stat"><b>46</b> videos</span>
+              <span class="stat"><b>31</b> summarized</span>
+              <span class="stat"><b>18</b> refs</span>
+            </div>
+            <div class="chip-row"><span class="chip chip-blue">Science</span><span class="chip">#deep-dives</span></div>
+          </div>
+        </div>
+        <div class="card channel-card" tabindex="0">
+          <div class="channel-avatar">π</div>
+          <div>
+            <div><span class="channel-name">3Blue1Brown</span><span class="channel-handle">@3blue1brown</span></div>
+            <div class="channel-stats">
+              <span class="stat"><b>29</b> videos</span>
+              <span class="stat"><b>27</b> summarized</span>
+              <span class="stat"><b>22</b> refs</span>
+            </div>
+            <div class="chip-row"><span class="chip chip-blue">Science</span><span class="chip">#deep-dives</span></div>
+          </div>
+        </div>
+        <div class="card channel-card" tabindex="0">
+          <div class="channel-avatar">⚡</div>
+          <div>
+            <div><span class="channel-name">Fireship</span><span class="channel-handle">@Fireship</span> <span class="music-flag">🎵 music</span></div>
+            <div class="channel-stats">
+              <span class="stat"><b>88</b> videos</span>
+              <span class="stat"><b>54</b> summarized</span>
+              <span class="stat"><b>9</b> refs</span>
+            </div>
+            <div class="chip-row"><span class="chip chip-blue">Dev</span><span class="chip">#quick-news</span></div>
+          </div>
+        </div>
+        <div class="card channel-card" tabindex="0">
+          <div class="channel-avatar">🎙</div>
+          <div>
+            <div><span class="channel-name">Lex Fridman</span><span class="channel-handle">@lexfridman</span></div>
+            <div class="channel-stats">
+              <span class="stat"><b>62</b> videos</span>
+              <span class="stat"><b>41</b> summarized</span>
+              <span class="stat"><b>37</b> refs</span>
+            </div>
+            <div class="chip-row"><span class="chip chip-purple">AI</span><span class="chip">#interviews</span></div>
+          </div>
+        </div>
+        <div class="card channel-card" tabindex="0">
+          <div class="channel-avatar">🎞</div>
+          <div>
+            <div><span class="channel-name">Two Minute Papers</span><span class="channel-handle">@TwoMinutePapers</span></div>
+            <div class="channel-stats">
+              <span class="stat"><b>104</b> videos</span>
+              <span class="stat"><b>80</b> summarized</span>
+              <span class="stat"><b>26</b> refs</span>
+            </div>
+            <div class="chip-row"><span class="chip chip-purple">AI</span><span class="chip">#quick-news</span></div>
+          </div>
+        </div>
+        <div class="card channel-card" tabindex="0">
+          <div class="channel-avatar">🎵</div>
+          <div>
+            <div><span class="channel-name">NPR Music</span><span class="channel-handle">@nprmusic</span></div>
+            <div class="channel-stats">
+              <span class="stat"><b>37</b> videos</span>
+              <span class="stat"><b>12</b> summarized</span>
+              <span class="stat"><b>3</b> refs</span>
+            </div>
+            <div class="chip-row"><span class="chip" style="background:#3dd68c; color:#0a0a0c; border-color:transparent; font-weight:700;">Music</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="demo-note">Demo — static mock with fake data. Click sidebar items to explore the other tabs.</div>
+    </section>
+
+    <!-- ============ WATCH ============ -->
+    <section class="page" id="page-watch" aria-label="Watch">
+      <div class="page-head">
+        <div>
+          <div class="page-kicker">Intelligent queue</div>
+          <h1 class="page-title">Now <span class="grad-text">playing</span></h1>
+        </div>
+        <div class="chip-row">
+          <button class="btn btn-sm">⏭ Skip</button>
+          <button class="btn btn-sm">🔀 Shuffle</button>
+          <button class="btn btn-sm">📌 Pin</button>
+        </div>
+      </div>
+
+      <div class="watch-layout">
+        <div>
+          <div class="player">
+            <div class="player-pill"><span class="player-pill-dot"></span> 1minyt</div>
+            <button class="player-button" aria-label="Play">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            </button>
+            <div class="player-meta"><span>18:24</span><span>·</span><span>2 of 7 in queue</span></div>
+          </div>
+
+          <h2 class="watch-title">The Quantum Algorithm That Broke Encryption (Probably)</h2>
+          <div class="watch-channel">Veritasium · 3 days ago · 1.2M views</div>
+
+          <div class="card card-pad summary-block" style="margin-top: 18px;">
+            <h3>Summary</h3>
+            <p class="tldr">
+              A walkthrough of Shor's algorithm — how a sufficiently large quantum computer
+              could factor RSA keys, why "sufficiently large" is doing enormous work in that
+              sentence, and where error-correction research actually stands.
+            </p>
+            <ul class="key-points">
+              <li><span class="ts">02:14</span> Classical factoring scales exponentially; the RSA-2048 bet</li>
+              <li><span class="ts">07:41</span> Qubits as interference machines — amplitudes, not parallel universes</li>
+              <li><span class="ts">12:09</span> The period-finding trick at the heart of Shor's algorithm</li>
+              <li><span class="ts">16:50</span> Why today's machines are nowhere near 20M stable qubits</li>
+            </ul>
+            <div class="chip-row" style="margin-top: 16px;">
+              <span class="chip chip-blue">Chapters · 6</span>
+              <span class="chip chip-purple">Topics: quantum, cryptography, RSA</span>
+              <span class="chip">★ Star</span>
+            </div>
+          </div>
+        </div>
+
+        <aside class="queue-rail">
+          <div class="queue-card-title">Up next — ranked for you</div>
+
+          <div class="queue-item now">
+            <div class="thumb"></div>
+            <div>
+              <div class="q-title">The Quantum Algorithm That Broke Encryption</div>
+              <div class="q-meta">Veritasium · playing now</div>
+            </div>
+          </div>
+
+          <div class="queue-item">
+            <div class="thumb"></div>
+            <div>
+              <div class="q-title">Why RSA is (still) safe in 2026</div>
+              <div class="q-meta">3Blue1Brown · 16:02</div>
+              <span class="q-why">✦ continues this topic</span>
+            </div>
+          </div>
+
+          <div class="queue-item">
+            <div class="thumb"></div>
+            <div>
+              <div class="q-title">Error correction: the real quantum bottleneck</div>
+              <div class="q-meta">Two Minute Papers · 8:47</div>
+              <span class="q-why">✦ cited by 3 of your summaries</span>
+            </div>
+          </div>
+
+          <div class="queue-item">
+            <div class="thumb"></div>
+            <div>
+              <div class="q-title">Quantum computing hype vs. reality — panel</div>
+              <div class="q-meta">Lex Fridman · 2:41:10</div>
+              <span class="q-why">✦ from a channel you binge</span>
+            </div>
+          </div>
+
+          <div class="queue-item">
+            <div class="thumb"></div>
+            <div>
+              <div class="q-title">Lo-fi beats to factor primes to</div>
+              <div class="q-meta">NPR Music · 42:00 · 🎵</div>
+              <span class="q-why">✦ music break — 3 in queue</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ INBOX ============ -->
+    <section class="page" id="page-inbox" aria-label="Inbox">
+      <div class="page-head">
+        <div>
+          <div class="page-kicker">Smart inbox</div>
+          <h1 class="page-title">Triage before <span class="grad-text">it queues</span></h1>
+          <p class="page-sub">New videos from your channels, scored by what you actually watch. Accept to queue, dismiss to skip.</p>
+        </div>
+        <span class="count-pill">3 new</span>
+      </div>
+
+      <div class="inbox-filters">
+        <span class="chip clickable active">New</span>
+        <span class="chip clickable">Dismissed</span>
+        <span class="chip clickable">All</span>
+      </div>
+
+      <div class="inbox-list">
+        <div class="card inbox-card">
+          <div class="thumb"></div>
+          <div class="inbox-body">
+            <div class="inbox-title">Why RSA is (still) safe in 2026</div>
+            <div class="inbox-meta">3Blue1Brown · 2h ago · 16:02</div>
+            <div class="inbox-actions">
+              <button class="btn btn-sm btn-accept">→ Queue</button>
+              <button class="btn btn-sm btn-ghost">Dismiss</button>
+              <button class="btn btn-sm btn-ghost">⏱ Later</button>
+            </div>
+            <div class="inbox-reasons chip-row">
+              <span class="chip chip-purple">✦ continues a topic you watched 3 videos on</span>
+              <span class="chip">from a channel you binge</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card inbox-card">
+          <div class="thumb"></div>
+          <div class="inbox-body">
+            <div class="inbox-title">This week in quantum: the 1,000-qubit chip that wasn't</div>
+            <div class="inbox-meta">Two Minute Papers · 6h ago · 9:12</div>
+            <div class="inbox-actions">
+              <button class="btn btn-sm btn-accept">→ Queue</button>
+              <button class="btn btn-sm btn-ghost">Dismiss</button>
+              <button class="btn btn-sm btn-ghost">⏱ Later</button>
+            </div>
+            <div class="inbox-reasons chip-row">
+              <span class="chip chip-purple">✦ cited by 3 of your summaries</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card inbox-card">
+          <div class="thumb"></div>
+          <div class="inbox-body">
+            <div class="inbox-title">Tiny desk: new classical session</div>
+            <div class="inbox-meta">NPR Music · yesterday · 18:40 · 🎵</div>
+            <div class="inbox-actions">
+              <button class="btn btn-sm btn-accept">→ Music queue</button>
+              <button class="btn btn-sm btn-ghost">Dismiss</button>
+              <button class="btn btn-sm btn-ghost">⏱ Later</button>
+            </div>
+            <div class="inbox-reasons chip-row">
+              <span class="chip">music — routed to the Music tab</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="inbox-empty-note">Dismissed items disappear from the queue builders — they won't resurface.</p>
+    </section>
+
+    <!-- ============ MUSIC ============ -->
+    <section class="page" id="page-music" aria-label="Music">
+      <div class="page-head">
+        <div>
+          <div class="page-kicker">Audio only</div>
+          <h1 class="page-title">Now <span class="grad-text">spinning</span></h1>
+        </div>
+        <div class="chip-row">
+          <button class="btn btn-sm">⏭ Skip</button>
+          <button class="btn btn-sm">🔀 Shuffle</button>
+        </div>
+      </div>
+
+      <div class="music-layout">
+        <div class="card card-pad now-card">
+          <div class="album spinning" id="album">
+            <div class="album-center"></div>
+          </div>
+          <div>
+            <div class="music-title">Lo-fi beats to factor primes to</div>
+            <div class="music-artist">NPR Music · Tiny Desk mix</div>
+          </div>
+          <div>
+            <div class="music-transport">
+              <button class="transport-btn" aria-label="Previous">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+              </button>
+              <button class="transport-btn main" id="play-toggle" aria-label="Play or pause">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+              </button>
+              <button class="transport-btn" aria-label="Next">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+              </button>
+            </div>
+            <div class="music-progress">
+              <div class="progress-bar"><i></i></div>
+              <div class="progress-times"><span>15:54</span><span>42:00</span></div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="music-list">
+          <div class="queue-card-title">Up next — audio only</div>
+
+          <div class="music-item now">
+            <div class="note-disc"></div>
+            <div>
+              <div class="q-title">Lo-fi beats to factor primes to</div>
+              <div class="q-meta">NPR Music · playing now</div>
+            </div>
+            <span class="music-dur">42:00</span>
+          </div>
+
+          <div class="music-item">
+            <div class="note-disc"></div>
+            <div>
+              <div class="q-title">Chill coding session — synthwave</div>
+              <div class="q-meta">Lofi Girl · 1:00:00</div>
+            </div>
+            <span class="music-dur">1:00:00</span>
+          </div>
+
+          <div class="music-item">
+            <div class="note-disc"></div>
+            <div>
+              <div class="q-title">Tiny desk: classical focus mix</div>
+              <div class="q-meta">NPR Music · 28:15</div>
+            </div>
+            <span class="music-dur">28:15</span>
+          </div>
+
+          <div class="music-item">
+            <div class="note-disc"></div>
+            <div>
+              <div class="q-title">Jazz for late-night refactors</div>
+              <div class="q-meta">Jazzwise · 51:30</div>
+            </div>
+            <span class="music-dur">51:30</span>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ LIBRARY ============ -->
+    <section class="page" id="page-library" aria-label="Library">
+      <div class="page-head">
+        <div>
+          <div class="page-kicker">Your collection</div>
+          <h1 class="page-title">Library</h1>
+          <p class="page-sub">Everything you've starred, liked, watched, or queued for later.</p>
+        </div>
+      </div>
+
+      <div class="library-layout">
+        <aside class="card rail-nav">
+          <div class="rail-item active"><span>★ Saved</span><span class="rail-count">12</span></div>
+          <div class="rail-item"><span>👍 Liked</span><span class="rail-count">34</span></div>
+          <div class="rail-item"><span>🕘 History</span><span class="rail-count">210</span></div>
+          <div class="rail-item"><span>📄 Summarized</span><span class="rail-count">245</span></div>
+          <div class="rail-item"><span>⏱ Summarize Later</span><span class="rail-count">12</span></div>
+        </aside>
+
+        <div>
+          <div class="video-row">
+            <div class="thumb"></div>
+            <div>
+              <div class="vr-title">The Quantum Algorithm That Broke Encryption (Probably)</div>
+              <div class="vr-meta">Veritasium · 3 days ago · 18:24</div>
+              <div class="chip-row"><span class="chip chip-blue">quantum</span><span class="chip">cryptography</span></div>
+            </div>
+            <button class="star on" aria-label="Star">★</button>
+          </div>
+          <div class="video-row">
+            <div class="thumb"></div>
+            <div>
+              <div class="vr-title">Neural networks demystified — the visual intro</div>
+              <div class="vr-meta">3Blue1Brown · 1 week ago · 19:13</div>
+              <div class="chip-row"><span class="chip chip-purple">ml</span><span class="chip">#deep-dives</span></div>
+            </div>
+            <button class="star" aria-label="Star">★</button>
+          </div>
+          <div class="video-row">
+            <div class="thumb"></div>
+            <div>
+              <div class="vr-title">Rust in 100 seconds (but actually 8 minutes)</div>
+              <div class="vr-meta">Fireship · 2 weeks ago · 8:12</div>
+              <div class="chip-row"><span class="chip chip-blue">rust</span><span class="chip">#quick-news</span></div>
+            </div>
+            <button class="star on" aria-label="Star">★</button>
+          </div>
+          <div class="video-row">
+            <div class="thumb"></div>
+            <div>
+              <div class="vr-title">Attention is all you need — paper walkthrough</div>
+              <div class="vr-meta">Two Minute Papers · 3 weeks ago · 14:45</div>
+              <div class="chip-row"><span class="chip chip-purple">transformers</span><span class="chip">papers</span></div>
+            </div>
+            <button class="star" aria-label="Star">★</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SEARCH ============ -->
+    <section class="page" id="page-search" aria-label="Search">
+      <div class="search-hero">
+        <div class="page-kicker">Across every transcript</div>
+        <h1 class="page-title" style="font-size: 30px;">Search your <span class="grad-text">whole library</span></h1>
+        <div class="search-box">
+          <input type="search" placeholder="Try: error correction thresholds" value="error correction qubits" />
+          <button class="btn btn-primary">Search</button>
+        </div>
+      </div>
+
+      <div class="search-results">
+        <div class="rerank-note">
+          <span class="rerank-badge">✦ Re-ranked</span>
+          <span>412 chunks in 18 channels · relevance re-judged, not just cosine</span>
+        </div>
+
+        <div class="card hit">
+          <div class="hit-title">The Quantum Algorithm That Broke Encryption (Probably)</div>
+          <div class="hit-channel">Veritasium · summarized · 18:24</div>
+          <div class="hit-quote">
+            "…so the real barrier isn't the qubit count on the slide, it's the
+            <mark>error correction overhead</mark> — you need roughly a thousand physical
+            <mark>qubits</mark> for every logical one, and nobody has…" …
+          </div>
+          <div class="hit-foot"><span class="ts">16:50</span><span class="ts">17:22</span></div>
+        </div>
+
+        <div class="card hit">
+          <div class="hit-title">Error correction: the real quantum bottleneck</div>
+          <div class="hit-channel">Two Minute Papers · summarized · 8:47</div>
+          <div class="hit-quote">
+            "This week a paper demonstrates surface-code <mark>error correction</mark>
+            below the break-even threshold for the first time on a…" …
+          </div>
+          <div class="hit-foot"><span class="ts">02:31</span><span class="ts">05:04</span></div>
+        </div>
+
+        <div class="card hit">
+          <div class="hit-title">Quantum computing hype vs. reality — panel</div>
+          <div class="hit-channel">Lex Fridman · transcript only · 2:41:10</div>
+          <div class="hit-quote">
+            "…people ask me how many <mark>qubits</mark> you need to break RSA and the honest
+            answer involves <mark>error correction</mark> budgets nobody wants to talk about…" …
+          </div>
+          <div class="hit-foot"><span class="ts">1:12:44</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CHAT ============ -->
+    <section class="page" id="page-chat" aria-label="Chat">
+      <div class="page-head">
+        <div>
+          <div class="page-kicker">Library chat</div>
+          <h1 class="page-title">Ask your <span class="grad-text">library</span></h1>
+        </div>
+      </div>
+
+      <div class="chat-layout">
+        <aside class="card thread-list">
+          <div class="thread-item active">
+            <div class="thread-title">Quantum vs classical</div>
+            <div class="thread-meta">12 msgs · 2h ago</div>
+          </div>
+          <div class="thread-item">
+            <div class="thread-title">Best transformer explainers</div>
+            <div class="thread-meta">8 msgs · yesterday</div>
+          </div>
+          <div class="thread-item">
+            <div class="thread-title">Where did Fireship cover Bun?</div>
+            <div class="thread-meta">5 msgs · 3d ago</div>
+          </div>
+        </aside>
+
+        <div class="card chat-panel">
+          <div class="chat-head">
+            <span class="chat-title">Quantum vs classical</span>
+            <span class="scope-select">▾ Scope: All channels</span>
+            <span class="toggle" id="deep-research" role="switch" tabindex="0">
+              <span>Deep Research</span>
+              <span class="toggle-track"></span>
+            </span>
+          </div>
+
+          <div class="chat-body">
+            <div class="bubble bubble-q">which of my channels covered error-correction thresholds, and did any of them disagree?</div>
+            <div class="bubble">
+              Three did. <b>Two Minute Papers</b> (02:31) reported the surface-code result as
+              "below break-even for the first time," while <b>Veritasium</b> (16:50) argues the
+              thousand-physical-per-logical overhead makes near-term RSA breaking unrealistic.
+              <b>Lex Fridman's</b> panel frames it as an engineering budget problem rather than
+              a physics one — closest to Veritasium, but more optimistic on timelines.
+              <br /><span class="cite">TMP 02:31</span><span class="cite">Ver 16:50</span><span class="cite">Lex 1:12:44</span>
+            </div>
+            <div class="bubble bubble-q">so who's right?</div>
+            <div class="bubble">
+              Short answer: they're disagreeing about different things — the threshold result is
+              real, but scaling it to RSA-2048 sizes is the open question. I can pull the
+              specific numbers from each transcript if you want a side-by-side.
+            </div>
+          </div>
+
+          <div class="chat-input">
+            <input type="text" placeholder="Ask across your summaries, transcripts, and dossiers…" />
+            <button class="btn btn-primary">Send</button>
+          </div>
+        </div>
+
+        <div class="memory-card-wrap">
+          <div class="card memory-card">
+            <div class="memory-head">
+              <div class="memory-avatar">🔬</div>
+              <div>
+                <div class="memory-title">Veritasium — memory</div>
+                <div class="memory-sub">Regenerated 3d ago · 31 summaries</div>
+              </div>
+            </div>
+            <div class="memory-text">
+              Rigorous explainers of physics and math with a bias toward "the surprising result."
+              Recurring threads: quantum hype-debunking, experiment design, historical misattribution.
+              Cites primary papers more than most channels you follow.
+            </div>
+            <div class="memory-tags chip-row">
+              <span class="chip chip-blue">quantum</span>
+              <span class="chip">#deep-dives</span>
+              <span class="chip">skeptical</span>
+            </div>
+            <button class="btn btn-sm" style="margin-top: 16px; width: 100%;">⟳ Regenerate memory</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="page" id="page-settings" aria-label="Settings">
+      <div class="page-head">
+        <div>
+          <div class="page-kicker">Account</div>
+          <h1 class="page-title">Settings</h1>
+        </div>
+      </div>
+
+      <div class="settings-layout">
+        <aside class="card rail-nav">
+          <div class="rail-item active"><span>🔗 Integrations</span></div>
+          <div class="rail-item"><span>🧪 Labs</span></div>
+          <div class="rail-item"><span>👤 Account</span></div>
+          <div class="rail-item"><span>🧩 Extension</span></div>
+        </aside>
+
+        <div>
+          <div class="settings-section">
+            <h3>Integrations</h3>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Readwise</div>
+                <div class="setting-desc">Export starred summaries to your Readwise library</div>
+              </div>
+              <span class="toggle on" role="switch" tabindex="0"><span class="toggle-track"></span></span>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Weekly digest email</div>
+                <div class="setting-desc">Sunday recap of what your channels taught you</div>
+              </div>
+              <span class="toggle" role="switch" tabindex="0"><span class="toggle-track"></span></span>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Extension</h3>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">API key</div>
+                <div class="setting-desc">Pairs the browser extension with this account</div>
+              </div>
+              <div class="key-box">ext_live_••••••••4f2a</div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Labs</h3>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">✦ Smart re-ranking</div>
+                <div class="setting-desc">Model judgments re-rank search &amp; retrieval results</div>
+              </div>
+              <span class="toggle on" role="switch" tabindex="0"><span class="toggle-track"></span></span>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Autoplay</div>
+                <div class="setting-desc">Off by default — the queue waits for you</div>
+              </div>
+              <span class="toggle" role="switch" tabindex="0"><span class="toggle-track"></span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+  // --- Page switching (hash-based) ---
+  const navItems = document.querySelectorAll(".nav-item");
+  const pages = document.querySelectorAll(".page");
+
+  function showPage(id) {
+    pages.forEach(p => p.classList.toggle("visible", p.id === "page-" + id));
+    navItems.forEach(n => n.classList.toggle("active", n.dataset.page === id));
+    document.querySelector(".main").scrollIntoView({ block: "start" });
+  }
+
+  navItems.forEach(item => {
+    item.addEventListener("click", e => {
+      e.preventDefault();
+      history.replaceState(null, "", "#" + item.dataset.page);
+      showPage(item.dataset.page);
+    });
+  });
+
+  // --- User popover ---
+  const userChip = document.getElementById("user-chip");
+  const userPopover = document.getElementById("user-popover");
+
+  function setPopover(open) {
+    userPopover.classList.toggle("open", open);
+    userChip.setAttribute("aria-expanded", String(open));
+  }
+
+  userChip.addEventListener("click", e => {
+    e.stopPropagation();
+    setPopover(!userPopover.classList.contains("open"));
+  });
+  document.addEventListener("click", e => {
+    if (!userPopover.contains(e.target)) setPopover(false);
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") setPopover(false);
+  });
+
+  // Popover items that navigate to a page (Settings)
+  userPopover.querySelectorAll(".user-popover-item[data-page]").forEach(item => {
+    item.addEventListener("click", () => {
+      setPopover(false);
+      history.replaceState(null, "", "#" + item.dataset.page);
+      showPage(item.dataset.page);
+    });
+  });
+
+  // Deep link on load
+  const initial = (location.hash || "#home").slice(1);
+  if (document.getElementById("page-" + initial)) showPage(initial);
+
+  // --- Toggles ---
+  document.querySelectorAll(".toggle").forEach(t => {
+    const flip = () => t.classList.toggle("on");
+    t.addEventListener("click", flip);
+    t.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); }
+    });
+  });
+
+  // --- Filter chips (home + inbox) ---
+  document.querySelectorAll(".filter-bar .chip.clickable, .inbox-filters .chip.clickable").forEach(c => {
+    c.addEventListener("click", () => {
+      c.closest(".chip-row, .inbox-filters").querySelectorAll(".chip").forEach(x => x.classList.remove("active"));
+      c.classList.add("active");
+    });
+  });
+
+  // --- Music: play/pause toggles vinyl spin + icon ---
+  const album = document.getElementById("album");
+  const playToggle = document.getElementById("play-toggle");
+  const iconPlay = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  const iconPause = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
+  playToggle.addEventListener("click", () => {
+    const spinning = album.classList.toggle("spinning");
+    playToggle.innerHTML = spinning ? iconPause : iconPlay;
+    playToggle.setAttribute("aria-label", spinning ? "Pause" : "Play");
+  });
+</script>
+</body>
+</html>

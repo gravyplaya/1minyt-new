@@ -1,8 +1,10 @@
 import Link from 'next/link';
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { InboxFeed } from '../_components/InboxFeed';
 import { FilterSelect } from '../_components/FilterSelect';
 import { listInboxVideos, listInboxCategories, listInboxChannels, INBOX_PAGE_SIZE } from '@/lib/inbox';
+import { rankInboxByInterest } from '@/lib/inbox-decision';
 import { resolvePageUser } from '@/lib/auth';
 import { formatCount } from '../_lib/format';
 
@@ -55,7 +57,7 @@ export default async function InboxPage({ searchParams }: PageProps) {
   const offset = (page - 1) * INBOX_PAGE_SIZE;
 
   const { user, connected } = await resolvePageUser();
-  const [categories, channels, result] = connected && user
+  const [categories, channels, baseResult] = connected && user
     ? await Promise.all([
         listInboxCategories(user.id),
         listInboxChannels(user.id),
@@ -69,6 +71,14 @@ export default async function InboxPage({ searchParams }: PageProps) {
         }),
       ])
     : [[], [], { videos: [], total: 0 }] as [Array<{ category_id: number; video_count: number }>, Array<{ channel_id: string; channel_title: string; video_count: number }>, { videos: never[]; total: number }];
+
+  // TAV-72: JEV interest pass — blends cached/fresh decision scores into the
+  // SQL order and interleaves channels. Degrades to SQL order (still
+  // tie-broken) when the decision layer is unavailable. Only re-ranks the
+  // 'new' scope; 'saved' is the user's own curation, leave it alone.
+  const result = connected && user && scope === 'new' && baseResult.videos.length > 0
+    ? { ...baseResult, videos: await rankInboxByInterest(user.id, baseResult.videos) }
+    : baseResult;
 
   const totalPages = Math.max(1, Math.ceil(result.total / INBOX_PAGE_SIZE));
 
@@ -97,12 +107,12 @@ export default async function InboxPage({ searchParams }: PageProps) {
 
   return (
     <AppShell tab="inbox" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📥 Inbox</h1>
-        <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>
-          A unified feed of new videos across all your subscriptions, ranked by relevance (engagement × recency × channel interaction). Triage with dismiss, save, or summarize.
-        </p>
-      </div>
+      <PageHead
+        kicker="Smart inbox"
+        title={<>Triage before <span className="grad-text">it queues</span></>}
+        sub="A unified feed of new videos across all your subscriptions, ranked by relevance (engagement × recency × channel interaction). Triage with dismiss, save, or summarize."
+        actions={scope === 'new' && result.total > 0 ? <span className="count-pill">{result.total} new</span> : undefined}
+      />
 
       {/* Scope toggle */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>

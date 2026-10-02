@@ -23,10 +23,9 @@ export function ChannelToolbar({ search, folderId, tagId, showMusic, showHidden,
 
   return (
     <form
-      className="toolbar-form"
+      className="toolbar-form channel-toolbar-card"
       action="/"
       method="get"
-      style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap', alignItems: 'center' }}
     >
       <input
         className="input toolbar-search"
@@ -34,7 +33,6 @@ export function ChannelToolbar({ search, folderId, tagId, showMusic, showHidden,
         name="q"
         defaultValue={search}
         placeholder="Search channels, handles, descriptions…"
-        style={{ flex: 1, minWidth: 240 }}
       />
       {folderId && <input type="hidden" name="folder" value={folderId} />}
       {tagId && <input type="hidden" name="tag" value={tagId} />}
@@ -57,11 +55,10 @@ export function ChannelToolbar({ search, folderId, tagId, showMusic, showHidden,
           const qs = params.toString();
           router.push(qs ? `/?${qs}` : '/');
         }}
-        style={{ width: 'auto', minWidth: 160 }}
       >
         {sortOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-      <button className="btn" type="submit">Search</button>
+      <button className="btn btn-primary" type="submit">Search</button>
     </form>
   );
 }

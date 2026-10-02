@@ -136,12 +136,13 @@ function FirstRunSync({
   } | null;
 }) {
   return (
-    <div style={{ maxWidth: 540, margin: "60px auto", textAlign: "center" }}>
-      <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8 }}>
-        You&apos;re connected
+    <div style={{ maxWidth: 620, margin: "40px auto", textAlign: "center" }}>
+      <div className="page-kicker" style={{ marginBottom: 10 }}>You&apos;re connected</div>
+      <h2 style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", marginBottom: 10 }}>
+        One sync away from <span className="grad-text">your library</span>
       </h2>
-      <p style={{ color: "#8b8b94", marginBottom: 28 }}>
-        Hit <strong>Sync now</strong> in the sidebar to pull your subscriptions.
+      <p style={{ color: "#8b8b94", fontSize: 15.5, lineHeight: 1.6, marginBottom: 28 }}>
+        Hit <strong>Sync now</strong> in the top bar to pull your subscriptions.
         We&apos;ll classify music channels automatically so you can hide them
         from your main view.
       </p>

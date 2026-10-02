@@ -1,4 +1,5 @@
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { IntegrationSettingsForm } from '../_components/IntegrationSettingsForm';
 import { INTEGRATIONS, listIntegrationSettings } from '@/lib/integrations';
 import { resolvePageUser } from '@/lib/auth';
@@ -16,10 +17,11 @@ export default async function SettingsPage() {
 
   return (
     <AppShell tab="settings" settingsActive="integrations" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>⚙ Settings</h1>
-      <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
-        Connect a read-later integration to send bookmarked summaries straight to your PKM system. One-tap &ldquo;Send to Readwise&rdquo; appears on each saved summary once a token is set.
-      </p>
+      <PageHead
+        kicker="Account"
+        title="Settings"
+        sub={<>Connect a read-later integration to send bookmarked summaries straight to your PKM system. One-tap &ldquo;Send to Readwise&rdquo; appears on each saved summary once a token is set.</>}
+      />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {INTEGRATIONS.map(meta => {

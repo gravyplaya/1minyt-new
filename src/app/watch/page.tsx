@@ -4,6 +4,7 @@ import { getVideoWithSummary } from '@/lib/video-repo';
 import { ingestVideoById } from '@/lib/video-ingest';
 import { resolvePageUser, ANON_USER_ID } from '@/lib/auth';
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { WatchQueue } from '../_components/WatchQueue';
 import type { WatchQueueItem } from '@/lib/types';
 
@@ -83,11 +84,12 @@ export default async function WatchPage({ searchParams }: PageProps) {
 
 function EmptyWatchState({ connected, failedRequested }: { connected: boolean; failedRequested: boolean }) {
   return (
-    <div style={{ maxWidth: 540, margin: '60px auto', textAlign: 'center' }}>
-      <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8 }}>
-        {failedRequested ? 'Could not load that video' : 'Nothing to watch yet'}
-      </h2>
-      <p style={{ color: '#8b8b94', fontSize: 14, lineHeight: 1.5 }}>
+    <div style={{ maxWidth: 620, margin: '24px auto 0' }}>
+      <PageHead
+        kicker="Intelligent queue"
+        title={failedRequested ? <>Could not load <span className="grad-text">that video</span></> : <>Nothing to <span className="grad-text">watch yet</span></>}
+      />
+      <p style={{ color: '#8b8b94', fontSize: 15, lineHeight: 1.6 }}>
         {failedRequested
           ? 'The video could not be fetched — it may be private, deleted, or the ID is wrong. Double-check the URL and try pasting it again.'
           : connected

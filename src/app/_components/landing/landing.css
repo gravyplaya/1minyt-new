@@ -45,7 +45,9 @@
 /* ----- Hero ----- */
 
 .landing-hero {
-  min-height: 100vh;
+  /* TAV-71: the bare shell renders a glass topbar above the hero —
+     100vh would push the fold past the viewport. */
+  min-height: calc(100vh - 90px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -899,7 +901,7 @@
 @media (max-width: 768px) {
   .landing-hero {
     padding: 60px 20px 24px;
-    min-height: 100vh;
+    min-height: calc(100vh - 90px);
   }
   .landing-hero-content {
     padding: 26px 20px 22px;

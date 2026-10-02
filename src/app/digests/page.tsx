@@ -1,5 +1,5 @@
-import Link from 'next/link';
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { GenerateDigestButton } from '../_components/GenerateDigestButton';
 import { DigestVideoRow } from '../_components/DigestVideoRow';
 import { latestDigestWithVideos, listRecentDigests } from '@/lib/digest';
@@ -21,15 +21,12 @@ export default async function DigestsPage() {
 
   return (
     <AppShell tab="settings" settingsActive="digests" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📋 New-video digest</h1>
-          <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 560 }}>
-            Sync every channel and collect the videos published since your last sync into a single digest. Each video links to YouTube and offers a quick-summarize option.
-          </p>
-        </div>
-        <GenerateDigestButton connected={connected} />
-      </div>
+      <PageHead
+        kicker="Labs"
+        title={<>New-video <span className="grad-text">digest</span></>}
+        sub="Sync every channel and collect the videos published since your last sync into a single digest. Each video links to YouTube and offers a quick-summarize option."
+        actions={<GenerateDigestButton connected={connected} />}
+      />
 
       {/* Latest digest */}
       {latest ? (

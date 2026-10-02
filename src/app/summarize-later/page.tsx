@@ -1,4 +1,5 @@
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { SummarizeLaterQueue } from '../_components/SummarizeLaterQueue';
 import { listQueueItems } from '@/lib/summarize-queue';
 import { resolvePageUser } from '@/lib/auth';
@@ -16,13 +17,12 @@ export default async function SummarizeLaterPage() {
 
   return (
     <AppShell tab="library" libraryActive="summarize-later" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>🔖 Summarize Later</h1>
-        <p style={{ color: '#8b8b94', fontSize: 13, maxWidth: 600 }}>
-          A Pocket-style queue for videos you want summarized later. Queue them from any video
-          row, then hit <strong>Summarize all</strong> to batch-generate TL;DRs in one go.
-        </p>
-      </div>
+      <PageHead
+        kicker="Your collection"
+        title={<>Summarize <span className="grad-text">Later</span></>}
+        sub={<>A Pocket-style queue for videos you want summarized later. Queue them from any video row, then hit <strong>Summarize all</strong> to batch-generate TL;DRs in one go.</>}
+        actions={<span className="count-pill">{items.length} queued</span>}
+      />
 
       <SummarizeLaterQueue items={items} />
     </AppShell>

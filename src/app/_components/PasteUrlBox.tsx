@@ -51,6 +51,8 @@ export function PasteUrlBox({ variant = 'header' }: { variant?: 'header' | 'hero
         gap: isHero ? 10 : 8,
         marginLeft: isHero ? 0 : 24,
         flexWrap: isHero ? 'wrap' : 'nowrap',
+        flex: isHero ? undefined : 1,
+        minWidth: 0,
       }}
     >
       <input
@@ -67,37 +69,39 @@ export function PasteUrlBox({ variant = 'header' }: { variant?: 'header' | 'hero
           }
         }}
         placeholder={
-          isHero ? 'Paste any YouTube video URL…' : 'Paste a YouTube video URL…'
+          isHero ? 'Paste any YouTube video URL…' : 'Paste any YouTube URL — instant summary, no sign-in'
         }
         aria-label="Paste a YouTube video URL"
         disabled={pending}
         spellCheck={false}
         style={{
-          flex: isHero ? 1 : undefined,
-          width: isHero ? 'min(420px, 100%)' : 240,
-          padding: isHero ? '13px 16px' : '7px 10px',
-          fontSize: isHero ? 15 : 13,
+          flex: isHero ? 1 : 1,
+          width: isHero ? 'min(420px, 100%)' : undefined,
+          minWidth: 0,
+          padding: isHero ? '13px 16px' : '10px 16px',
+          fontSize: isHero ? 15 : 14.5,
           color: '#e7e7ea',
-          background: isHero ? 'rgba(20, 20, 26, 0.75)' : '#15151a',
-          border: isHero ? '1px solid #2a2a33' : '1px solid #2a2a33',
-          borderRadius: isHero ? 10 : 8,
+          background: 'rgba(20, 20, 26, 0.75)',
+          border: '1px solid #2a2a33',
+          borderRadius: isHero ? 10 : 10,
           outline: 'none',
-          backdropFilter: isHero ? 'blur(8px)' : undefined,
+          transition: 'border-color .2s ease, box-shadow .2s ease',
         }}
       />
       <button
         type="button"
-        className={isHero ? 'btn btn-primary landing-btn-lg' : 'btn btn-ghost'}
+        className={isHero ? 'btn btn-primary landing-btn-lg' : 'btn btn-primary'}
         onClick={submit}
         disabled={pending || !value.trim()}
         title="Fetch the video, its transcript, and open it here"
         style={{
-          fontSize: isHero ? undefined : 12,
-          padding: isHero ? undefined : '7px 12px',
+          fontSize: isHero ? undefined : 14,
+          padding: isHero ? undefined : '10px 18px',
           whiteSpace: 'nowrap',
+          flex: 'none',
         }}
       >
-        {pending ? 'Processing…' : isHero ? 'Summarize it' : 'Process'}
+        {pending ? 'Processing…' : isHero ? 'Summarize it' : 'Summarize'}
       </button>
 
       {error && (

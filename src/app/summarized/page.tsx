@@ -1,4 +1,5 @@
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { SummarizedVideoList } from '../_components/SummarizedVideoList';
 import { listSummarizedVideos } from '@/lib/video-repo';
 import { resolvePageUser } from '@/lib/auth';
@@ -16,10 +17,12 @@ export default async function SummarizedPage() {
 
   return (
     <AppShell tab="library" libraryActive="summarized" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>✦ Summarized videos</h1>
-      <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
-        Every video with a cached summary, sorted by most recently summarized.
-      </p>
+      <PageHead
+        kicker="Your collection"
+        title={<>✦ Summarized <span className="grad-text">videos</span></>}
+        sub="Every video with a cached summary, sorted by most recently summarized."
+        actions={<span className="count-pill">{items.length} summarized</span>}
+      />
 
       {items.length === 0 ? (
         <div

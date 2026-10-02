@@ -11,3 +11,6 @@ data
 
 # Built extension bundle — Docker bakes it in; dev falls back to extension/dist
 public/extension/
+
+# Incremental build info — regenerated on every typecheck
+tsconfig.tsbuildinfo
