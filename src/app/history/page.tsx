@@ -1,5 +1,6 @@
 import { listPlayHistory } from '@/lib/video-repo';
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { resolvePageUser } from '@/lib/auth';
 import { VideoSummaryRow } from '../_components/VideoSummaryRow';
 
@@ -10,8 +11,11 @@ export default async function HistoryPage() {
   const videos = connected && user ? await listPlayHistory(user.id) : [];
   return (
     <AppShell tab="library" libraryActive="history" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <h1 style={{ margin: '0 0 8px', fontSize: 28 }}>Play history</h1>
-      <p style={{ color: '#8b8b94', marginBottom: 24 }}>Videos you have watched inside 1minyt, most recent first. Playback is recorded automatically as you watch — YouTube does not expose a watch-history list, so this only contains sessions inside the in-app player.</p>
+      <PageHead
+        kicker="Your collection"
+        title={<>Play <span className="grad-text">history</span></>}
+        sub="Videos you have watched inside 1minyt, most recent first. Playback is recorded automatically as you watch — YouTube does not expose a watch-history list, so this only contains sessions inside the in-app player."
+      />
       {videos.length === 0 ? <p style={{ color: '#8b8b94' }}>Your play history is empty.</p> : <div style={{ display: 'grid', gap: 12 }}>{videos.map(video => <VideoSummaryRow key={video.video_id} video={video} channelId={video.channel_id} />)}</div>}
     </AppShell>
   );

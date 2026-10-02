@@ -194,7 +194,7 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
               <span style={{ color: '#5cd9a3' }}>✓ summarized</span>
             )}
           </div>
-          {/* Relevance bar */}
+          {/* Relevance bar (+ JEV interest badge when the decision layer scored it) */}
           <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ flex: 1, maxWidth: 160, height: 4, borderRadius: 2, background: '#1f1f26', overflow: 'hidden' }}>
               <div
@@ -209,6 +209,22 @@ function InboxRow({ video, scope }: { video: InboxVideo; scope: 'new' | 'saved' 
             <span style={{ fontSize: 10, color: '#5a5a64', minWidth: 38 }}>
               {Math.round(video.relevance_score * 100)}%
             </span>
+            {video.jev_interest != null && (
+              <span
+                title="Decision model interest judgment (routine → must-watch)"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: '#a88fff',
+                  background: 'rgba(124, 92, 255, 0.12)',
+                  border: '1px solid rgba(124, 92, 255, 0.25)',
+                  borderRadius: 4,
+                  padding: '1px 6px',
+                }}
+              >
+                ✦ {Math.round(video.jev_interest * 100)}
+              </span>
+            )}
           </div>
           {triageError && (
             <div style={{ color: '#ff6363', fontSize: 12, marginTop: 6 }}>

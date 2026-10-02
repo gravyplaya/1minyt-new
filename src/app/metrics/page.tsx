@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getMetrics } from '@/lib/metrics';
 import type { CoverageStat, WeeklyBucket } from '@/lib/metrics';
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { formatCount, formatRelative, youtubeVideoUrl } from '../_lib/format';
 import { resolvePageUser, ANON_USER_ID } from '@/lib/auth';
 
@@ -20,10 +21,11 @@ export default async function MetricsPage() {
 
   return (
     <AppShell tab="library" libraryActive="metrics" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>📊 Your metrics</h1>
-        <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 28 }}>
-          Derived from your summary and chat activity. Updated automatically as you use the app.
-        </p>
+      <PageHead
+        kicker="Your collection"
+        title={<>Your <span className="grad-text">metrics</span></>}
+        sub="Derived from your summary and chat activity. Updated automatically as you use the app."
+      />
 
         {m.summary.total_interactions === 0 ? (
           <EmptyState connected={connected} />

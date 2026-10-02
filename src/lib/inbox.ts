@@ -120,7 +120,12 @@ export async function listInboxVideos(userId: string, query: InboxQuery = {}): P
         -- relevance = engagement × recency × (1 + channel_signal)
         (engagement * recency * (1 + channel_signal)) AS raw_score
       FROM scored
-      ORDER BY raw_score DESC NULLS LAST
+      -- TAV-72: deterministic tie-breakers. The multiplicative formula
+      -- produces near-identical scores for clusters of same-stats uploads
+      -- (e.g. one channel's batch upload); without explicit tie-breakers
+      -- Postgres returns them in scan order — the feed looked shuffled.
+      -- Newest first within a score cluster, then by id for total order.
+      ORDER BY raw_score DESC NULLS LAST, published_at DESC NULLS LAST, video_id
       LIMIT ${limit} OFFSET ${offset}`;
 
     const { rows } = await client.query<{

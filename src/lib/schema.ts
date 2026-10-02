@@ -797,6 +797,23 @@ END $$;`,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
+
+  // ----- TAV-72: JEV inbox interest scores — per-video decision cache -----------
+  //
+  // One row per (user, video) that the JEV decision model has scored for the
+  // Smart Inbox triage feed. `interest_score` is 0-3 (index into the rubric
+  // levels in lib/inbox-decision.ts); `model` records which pinned JEV
+  // version produced it so a version bump can invalidate old scores.
+  // Scores are cached because the inbox re-renders on every triage action
+  // and JEV calls cost money — judge once, reuse.
+  `CREATE TABLE IF NOT EXISTS jev_video_scores (
+    user_id        TEXT NOT NULL,
+    video_id       TEXT NOT NULL,
+    interest_score DOUBLE PRECISION NOT NULL,
+    model          TEXT NOT NULL,
+    created_at     INTEGER NOT NULL,
+    PRIMARY KEY (user_id, video_id)
+  )`,
 ];
 
 export const SEED_FOLDERS = ['Watch Later', 'Reference', 'Music'] as const;

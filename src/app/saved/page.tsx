@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { SendToReadwiseButton } from '../_components/SendToReadwiseButton';
 import { listBookmarkedSummaries } from '@/lib/video-repo';
 import { getIntegrationSettings } from '@/lib/integrations';
@@ -25,10 +26,12 @@ export default async function SavedPage() {
 
   return (
     <AppShell tab="library" libraryActive="saved" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>★ Saved summaries</h1>
-      <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
-        Summaries you&apos;ve bookmarked for later reference, sorted by most recently saved.
-      </p>
+      <PageHead
+        kicker="Your collection"
+        title={<>★ Saved <span className="grad-text">summaries</span></>}
+        sub="Summaries you've bookmarked for later reference, sorted by most recently saved."
+        actions={<span className="count-pill">{items.length} saved</span>}
+      />
 
       {items.length === 0 ? (
         <div

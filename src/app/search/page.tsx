@@ -1,4 +1,5 @@
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { TranscriptSearchForm } from '../_components/TranscriptSearchForm';
 import { resolvePageUser } from '@/lib/auth';
 
@@ -20,11 +21,11 @@ export default async function SearchPage({ searchParams }: PageProps) {
 
   return (
     <AppShell tab="search" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 1000, margin: '0 auto', width: '100%' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>🔍 Search transcripts</h1>
-      <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
-        Search across every indexed transcript in your library. Results are ranked by relevance and link straight to the moment in the video.
-        Prefer a conversation? <a href="/chat" style={{ color: '#5cd9a3' }}>Chat with your library →</a>
-      </p>
+      <PageHead
+        kicker="Across every transcript"
+        title={<>Search your <span className="grad-text">whole library</span></>}
+        sub={<>Search across every indexed transcript in your library. Results are ranked by relevance and link straight to the moment in the video. Prefer a conversation? <a href="/chat" style={{ color: '#5cd9a3' }}>Chat with your library →</a></>}
+      />
 
       <TranscriptSearchForm initialQuery={initialQuery} />
     </AppShell>

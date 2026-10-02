@@ -3,7 +3,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { getChannel } from '@/lib/repo';
 import { getPlaylist, listPlaylistVideos, getPlaylistSummary } from '@/lib/playlist-repo';
-import { HeaderBar } from '../../../../_components/HeaderBar';
+import { AppShell } from '../../../../_components/AppShell';
 import { PlaylistSummaryPanel } from '../../../../_components/PlaylistSummaryPanel';
 import { PlaylistVideosPanel } from '../../../../_components/PlaylistVideosPanel';
 import { formatCount, formatRelative, youtubePlaylistUrl } from '../../../../_lib/format';
@@ -38,9 +38,8 @@ export default async function PlaylistDetailPage({ params }: Props) {
   const summary = playlistBelongsToChannel ? await getPlaylistSummary(scopedUserId, playlistId) : null;
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <HeaderBar connected={connected} signedIn={Boolean(user)} profile={user} />
-      <main style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+    <AppShell tab="channels" noRail connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+      <main>
         <div style={{ marginBottom: 14, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <Link href={`/c/${channelId}`} style={{ color: '#8b8b94', fontSize: 13, textDecoration: 'none' }}>← Back to {channel.title}</Link>
         </div>
@@ -107,6 +106,6 @@ export default async function PlaylistDetailPage({ params }: Props) {
           </>
         )}
       </main>
-    </div>
+    </AppShell>
   );
 }

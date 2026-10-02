@@ -3,6 +3,7 @@ import { queryChannelsFromParams, PAGE_SIZE_OPTIONS } from '@/lib/queries';
 import type { FolderRow, TagRow } from '@/lib/types';
 import { ChannelRowItem } from './ChannelRowItem';
 import { ChannelToolbar } from './ChannelToolbar';
+import { PageHead } from './PageHead';
 import { FolderActions } from './FolderActions';
 import { PageSizeSelect } from './PageSizeSelect';
 import { TagActions } from './TagActions';
@@ -58,6 +59,13 @@ export async function ChannelList({ userId, search, folderId, tagId, showMusic, 
 
   return (
     <div>
+      <PageHead
+        kicker="Your subscriptions"
+        title={<>Channels <span className="grad-text">{total}</span></>}
+        sub="Everything you follow, summarized and connected. Click a channel to open its dossier."
+        actions={<span className="count-pill">{total} {total === 1 ? 'channel' : 'channels'}</span>}
+      />
+
       {/* Toolbar (client component — auto-submits on sort change) */}
       <ChannelToolbar
         search={search}
@@ -75,10 +83,8 @@ export async function ChannelList({ userId, search, folderId, tagId, showMusic, 
       )}
 
       {/* Summary + top pagination */}
-      <div className="channel-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, color: '#8b8b94', fontSize: 13 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <strong style={{ color: '#e7e7ea' }}>{total}</strong>
-          <span>{total === 1 ? 'channel' : 'channels'}</span>
+      <div className="channel-summary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', color: '#8b8b94', fontSize: 14 }}>
           {search && <span>matching &ldquo;{search}&rdquo;</span>}
           {folderId && folderId !== 'none' && folderById.get(folderId) && (
             <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
@@ -116,12 +122,12 @@ export async function ChannelList({ userId, search, folderId, tagId, showMusic, 
         </div>
       </div>
 
-      {/* List */}
+      {/* Grid */}
       {channels.length === 0 ? (
         <EmptyState folderId={folderId} tagId={tagId} search={search} />
       ) : (
         <>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="channel-grid">
             {channels.map(c => (
               <ChannelRowItem key={c.channel_id} channel={c} folders={folders} tags={tags} />
             ))}
@@ -151,22 +157,24 @@ const pageBtnStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  minWidth: 32,
-  height: 32,
-  padding: '0 8px',
-  borderRadius: 6,
-  fontSize: 13,
+  minWidth: 34,
+  height: 34,
+  padding: '0 10px',
+  borderRadius: 999,
+  fontSize: 14,
+  fontWeight: 500,
   textDecoration: 'none',
   border: '1px solid #2a2a33',
-  background: '#15151a',
+  background: 'rgba(20, 20, 26, 0.7)',
   color: '#c2c2cb',
 };
 const activePageBtnStyle: React.CSSProperties = {
   ...pageBtnStyle,
-  background: '#5b9eff',
-  color: '#0a0a0c',
-  borderColor: '#5b9eff',
-  fontWeight: 600,
+  background: 'linear-gradient(135deg, #5b9eff, #7c5cff)',
+  color: '#fff',
+  borderColor: 'transparent',
+  fontWeight: 700,
+  boxShadow: '0 4px 18px rgba(91, 158, 255, 0.35)',
 };
 const disabledPageBtnStyle: React.CSSProperties = {
   ...pageBtnStyle,
@@ -294,7 +302,7 @@ function EmptyState({ folderId, tagId, search }: { folderId: string | null; tagI
   else if (tagId === 'none') msg = 'No untagged channels.';
   else if (tagId) msg = 'No channels with this tag yet.';
   return (
-    <div style={{ padding: '60px 20px', textAlign: 'center', color: '#8b8b94', border: '1px dashed #2a2a33', borderRadius: 12 }}>
+    <div style={{ padding: '60px 20px', textAlign: 'center', color: '#8b8b94', fontSize: 15, border: '1px dashed rgba(91, 158, 255, 0.35)', borderRadius: 16, background: 'rgba(91, 158, 255, 0.04)' }}>
       <div style={{ fontSize: 32, marginBottom: 8 }}>🪹</div>
       <div>{msg}</div>
     </div>

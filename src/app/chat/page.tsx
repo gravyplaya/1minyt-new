@@ -1,4 +1,5 @@
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { LibraryChatPanel } from '../_components/LibraryChatPanel';
 import { resolvePageUser } from '@/lib/auth';
 
@@ -14,12 +15,11 @@ export default async function ChatPage() {
 
   return (
     <AppShell tab="library" libraryActive="chat" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>💬 Chat with your library</h1>
-      <p style={{ color: '#8b8b94', fontSize: 13, marginBottom: 24 }}>
-        Ask anything across every indexed video. Answers are grounded in transcripts and summaries, with citations
-        that link to the exact moment in the source video. Scope the conversation to a folder, tag, or channel —
-        or turn on Deep Research to let the agent search for itself.
-      </p>
+      <PageHead
+        kicker="Library chat"
+        title={<>Ask your <span className="grad-text">library</span></>}
+        sub={<>Ask anything across every indexed video. Answers are grounded in transcripts and summaries, with citations that link to the exact moment in the source video. Scope the conversation to a folder, tag, or channel — or turn on Deep Research to let the agent search for itself.</>}
+      />
 
       <LibraryChatPanel />
     </AppShell>

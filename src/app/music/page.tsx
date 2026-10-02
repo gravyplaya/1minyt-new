@@ -4,6 +4,7 @@ import { getVideo } from '@/lib/video-repo';
 import { computeMusicVideoPresentation } from '@/lib/music-video-pref';
 import { resolvePageUser } from '@/lib/auth';
 import { AppShell } from '../_components/AppShell';
+import { PageHead } from '../_components/PageHead';
 import { MusicQueue, MusicLibrarySection } from '../_components/MusicQueue';
 import type { MusicLibraryGroup, MusicQueueItem } from '@/lib/types';
 
@@ -119,12 +120,11 @@ export default async function MusicPage({ searchParams }: PageProps) {
       <AppShell tab="music" connected={connected} userId={user?.id ?? null} profile={user} mainStyle={{ maxWidth: 'none', width: '100%' }}>
         {library.length > 0 ? (
           <div style={{ maxWidth: 720, margin: '0 auto' }}>
-            <h2 style={{ fontSize: 22, fontWeight: 600, margin: '40px 0 8px' }}>
-              Pick something to play
-            </h2>
-            <p style={{ color: '#8b8b94', fontSize: 14, marginBottom: 24 }}>
-              Your queue is empty, but your music library is all here.
-            </p>
+            <PageHead
+              kicker="Audio only"
+              title={<>Pick something <span className="grad-text">to play</span></>}
+              sub="Your queue is empty, but your music library is all here."
+            />
             <MusicLibrarySection groups={library} activeId={null} />
           </div>
         ) : (
@@ -143,11 +143,12 @@ export default async function MusicPage({ searchParams }: PageProps) {
 
 function EmptyMusicState({ connected }: { connected: boolean }) {
   return (
-    <div style={{ maxWidth: 540, margin: '60px auto', textAlign: 'center' }}>
-      <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8 }}>
-        Nothing to play yet
-      </h2>
-      <p style={{ color: '#8b8b94', fontSize: 14, lineHeight: 1.5 }}>
+    <div style={{ maxWidth: 620, margin: '24px auto 0' }}>
+      <PageHead
+        kicker="Audio only"
+        title={<>Nothing to <span className="grad-text">play yet</span></>}
+      />
+      <p style={{ color: '#8b8b94', fontSize: 15, lineHeight: 1.6 }}>
         {connected
           ? 'Your Music queue is empty. Flag channels as music in the Channels tab to build a listening queue from the artists you love.'
           : 'Connect your YouTube account to build a Music queue from your subscriptions.'}

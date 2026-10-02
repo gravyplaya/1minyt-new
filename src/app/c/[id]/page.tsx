@@ -1,5 +1,4 @@
 import { notFound } from 'next/navigation';
-import Link from 'next/link';
 import Image from 'next/image';
 import { getChannel, listFolders, listTags } from '@/lib/repo';
 import { listVideosByChannel } from '@/lib/video-repo';
@@ -62,12 +61,12 @@ export default async function ChannelPage({ params }: Props) {
             </div>
           )}
           <div className="channel-header-info" style={{ flex: 1, minWidth: 0 }}>
-            <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-0.02em', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
               {channel.title}
               {channel.music_flag === 1 && <span className="chip chip-music">🎵 music</span>}
               {channel.hidden === 1 && <span className="chip">hidden</span>}
             </h1>
-            <div className="channel-header-meta" style={{ color: '#8b8b94', fontSize: 13, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="channel-header-meta" style={{ color: '#8b8b94', fontSize: 14, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               {channel.handle && <span>{channel.handle}</span>}
               {channel.custom_url && <span>{channel.custom_url}</span>}
               {channel.country && <span>{channel.country}</span>}
@@ -75,11 +74,11 @@ export default async function ChannelPage({ params }: Props) {
                 Open on YouTube ↗
               </a>
             </div>
-            <div style={{ color: '#8b8b94', fontSize: 13, marginTop: 8 }}>
+            <div style={{ color: '#8b8b94', fontSize: 14, marginTop: 8 }}>
               {formatCount(channel.subscriber_count)} subscribers · {formatCount(channel.video_count)} videos · subscribed {formatRelative(channel.subscribed_at)}
             </div>
             {channel.description && (
-              <p style={{ marginTop: 10, color: '#c2c2cb', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', maxWidth: 720 }}>
+              <p style={{ marginTop: 10, color: '#c2c2cb', fontSize: 14.5, lineHeight: 1.6, whiteSpace: 'pre-wrap', maxWidth: 720 }}>
                 {channel.description}
               </p>
             )}
